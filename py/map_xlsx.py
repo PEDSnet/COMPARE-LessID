@@ -31,6 +31,21 @@ ID_COLUMNS = {
     "med_id",
 }
 
+# Translates COMPARE study XLSX column headers (lowercased) to CDM column names
+XLSX_COLUMN_MAP = {
+    "patient id":      "patid",
+    "encounter id":    "encounterid",
+    "diagnosis id":    "diagnosisid",
+    "lab result id":   "lab_result_cm_id",
+    "med id":          "med_id",
+    "c_patid":         "patid",
+    "c_trialid":       "trialid",
+    "c_partid":        "trialid",
+    "e_partid":        "trialid",
+    "c_siteid":        "trial_siteid",
+    "e_siteid":        "trial_siteid",
+}
+
 
 def norm(v):
     if v is None:
@@ -86,6 +101,8 @@ for ws in wb.worksheets:
         col = str(h).strip().lower()
         if col in ID_COLUMNS:
             id_cols.append((i, col))
+        elif col in XLSX_COLUMN_MAP:
+            id_cols.append((i, XLSX_COLUMN_MAP[col]))
 
     if not id_cols:
         continue
