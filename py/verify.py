@@ -23,9 +23,11 @@ if len(sys.argv) != 2:
 
 SITE = sys.argv[1]
 
-CPT_BASE   = "REDACTED:/data/sas_queries/<source_user>/compare_q01"
-OUT_BASE   = "REDACTED:/data/sas_queries/<your_user>/lessid_drnoc"
-LOOKUP_BASE = "REDACTED:/data/sas_queries/<your_user>/lessid_lookup"
+# Paths — read from environment (set via .env loaded by the calling shell script)
+# or fall back to defaults so verify.py can also be run standalone.
+CPT_BASE    = os.environ.get("CPT_BASE",    "REDACTED:/data/sas_queries/<source_user>/compare_q01")
+OUT_BASE    = os.environ.get("OUT_BASE",    "REDACTED:/data/sas_queries/<your_user>/lessid_drnoc")
+LOOKUP_BASE = os.environ.get("LOOKUP_BASE", "REDACTED:/data/sas_queries/<your_user>/lessid_lookup")
 
 src_drnoc   = os.path.join(CPT_BASE,    SITE, "drnoc")
 out_dir     = os.path.join(OUT_BASE,    SITE)

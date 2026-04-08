@@ -29,11 +29,20 @@ if [ "$STATUS" -eq 1 ]; then
     exit 0
 fi
 
-CPT_BASE="REDACTED:/data/sas_queries/<source_user>/compare_q01"
-WORK_BASE="REDACTED:/data/sas_queries/<your_user>/lessid_work"
-OUT_BASE="REDACTED:/data/sas_queries/<your_user>/lessid_drnoc"
-LOOKUP_BASE="REDACTED:/data/sas_queries/<your_user>/lessid_lookup"   # KEEP THIS RESTRICTED
-LESSID_DIR="REDACTED:/home/<your_user>/lessid"
+# Load .env from the repo root (values already in the environment take precedence)
+_ENV_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.env"
+if [ -f "$_ENV_FILE" ]; then
+    set -o allexport
+    # shellcheck source=.env
+    source "$_ENV_FILE"
+    set +o allexport
+fi
+
+: "${CPT_BASE:?'.env or environment must set CPT_BASE'}"
+: "${WORK_BASE:?'.env or environment must set WORK_BASE'}"
+: "${OUT_BASE:?'.env or environment must set OUT_BASE'}"
+: "${LOOKUP_BASE:?'.env or environment must set LOOKUP_BASE (KEEP RESTRICTED)'}" 
+: "${LESSID_DIR:?'.env or environment must set LESSID_DIR'}"
 SUMMARY_FILE="$OUT_BASE/summary.txt"
 
 mkdir -p "$WORK_BASE" "$OUT_BASE" "$LOOKUP_BASE"
