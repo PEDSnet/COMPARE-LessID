@@ -49,6 +49,19 @@ mkdir -p "$WORK_BASE" "$OUT_BASE" "$LOOKUP_BASE"
 
 CURRENT_SAS7BDAT_DIR=""
 CURRENT_MAPPED_DIR=""
+pipeline_start=$(date +%s)
+
+# Print HH:MM:SS since pipeline_start
+elapsed() {
+    local secs=$(( $(date +%s) - pipeline_start ))
+    printf '%02d:%02d:%02d' $((secs/3600)) $(( (secs%3600)/60 )) $((secs%60))
+}
+
+# Print elapsed since a given epoch second
+step_elapsed() {
+    local secs=$(( $(date +%s) - $1 ))
+    printf '%dm%02ds' $((secs/60)) $((secs%60))
+}
 
 cleanup() {
     echo ""
@@ -71,8 +84,8 @@ trap cleanup SIGINT SIGTERM
     echo "Generated: $(date)"
     echo "Mode: deterministic per-site mapped IDs"
     echo ""
-    printf "%-35s %8s %10s %10s %12s\n" "Site" "Tables" "Mappings" "CPT Size" "Status"
-    printf "%-35s %8s %10s %10s %12s\n" "----" "------" "--------" "--------" "------"
+    printf "%-35s %8s %10s %10s %10s %12s\n" "Site" "Tables" "Mappings" "CPT Size" "Time" "Status"
+    printf "%-35s %8s %10s %10s %10s %12s\n" "----" "------" "--------" "--------" "----" "------"
 } > "$SUMMARY_FILE"
 
 for site_drnoc in "$CPT_BASE"/*/drnoc; do
@@ -85,14 +98,14 @@ for site_drnoc in "$CPT_BASE"/*/drnoc; do
 
     if [ -f "$site_out/_cpt_completed" ] && [ -f "$mapping_csv" ] && [ "$FORCE" -eq 0 ]; then
         echo "[SKIP] $site_name CPT already done and mapping exists."
-        printf "%-35s %8s %10s %10s %12s\n" "$site_name" "-" "-" "-" "SKIPPED" >> "$SUMMARY_FILE"
+        printf "%-35s %8s %10s %10s %10s %12s\n" "$site_name" "-" "-" "-" "-" "SKIPPED" >> "$SUMMARY_FILE"
         continue
     fi
 
     cpt_file="$(ls "$site_drnoc"/*.cpt 2>/dev/null | head -1)"
     if [ -z "$cpt_file" ]; then
         echo "[WARN] No CPT found for $site_name, skipping."
-        printf "%-35s %8s %10s %10s %12s\n" "$site_name" "-" "-" "-" "NO CPT" >> "$SUMMARY_FILE"
+        printf "%-35s %8s %10s %10s %10s %12s\n" "$site_name" "-" "-" "-" "-" "NO CPT" >> "$SUMMARY_FILE"
         continue
     fi
 
@@ -112,8 +125,11 @@ for site_drnoc in "$CPT_BASE"/*/drnoc; do
     echo "══════════════════════════════════════════════"
     echo " Site: $site_name"
     echo " CPT:  $cpt_file"
+    echo " Start: $(date)  [+$(elapsed) total]"
     echo "══════════════════════════════════════════════"
+    site_start=$(date +%s)
 
+    step_start=$(date +%s)
     echo "[1/5] proc cimport..."
     sas -nodms -stdio <<EOF
 libname outlib "$sas7bdat_dir";
@@ -122,13 +138,16 @@ run;
 EOF
 
     table_count=$(ls "$sas7bdat_dir"/*.sas7bdat 2>/dev/null | wc -l)
-    echo "      Extracted $table_count datasets"
+    echo "      Extracted $table_count datasets  ($(step_elapsed $step_start))"
 
+    step_start=$(date +%s)
     echo "[2/5] Collecting CPT ID values..."
     sas -print "$mapped_dir/collect_ids.lst" -log "$mapped_dir/collect_ids.log" \
         -initstmt "%let input_lib_path = $sas7bdat_dir; %let output_csv = $cpt_ids_csv;" \
         "$LESSID_DIR/sas/collect_site_ids.sas"
+    echo "      Done  ($(step_elapsed $step_start))"
 
+    step_start=$(date +%s)
     echo "[3/5] Building per-site mapping (CPT + XLSX)..."
     python3 "$LESSID_DIR/py/build_site_mapping.py" \
         "$site_name" \
@@ -136,7 +155,9 @@ EOF
         "$site_drnoc" \
         "$mapping_csv" \
         "$mapping_report"
+    echo "      Done  ($(step_elapsed $step_start))"
 
+    step_start=$(date +%s)
     echo "[4/5] Applying mapping to CPT datasets..."
     pushd "$LESSID_DIR" > /dev/null
     bash run.sh \
@@ -146,7 +167,9 @@ EOF
         "sas7bdat" \
         "0"
     popd > /dev/null
+    echo "      Done  ($(step_elapsed $step_start))"
 
+    step_start=$(date +%s)
     echo "[5/5] proc cport -> mapped CPT..."
     out_cpt="$site_out/${cpt_stem}.cpt"
     sas -nodms -stdio <<EOF
@@ -158,8 +181,9 @@ EOF
 
     mapping_count=$(awk -F, 'NR>1{n++} END{print n+0}' "$mapping_csv")
     cpt_size=$(du -sh "$site_out" | cut -f1)
+    site_time=$(step_elapsed $site_start)
 
-    printf "%-35s %8s %10s %10s %12s\n" "$site_name" "$table_count" "$mapping_count" "$cpt_size" "OK" >> "$SUMMARY_FILE"
+    printf "%-35s %8s %10s %10s %10s %12s\n" "$site_name" "$table_count" "$mapping_count" "$cpt_size" "$site_time" "OK" >> "$SUMMARY_FILE"
 
     touch "$site_out/_cpt_completed"
 
@@ -170,7 +194,7 @@ EOF
 
     echo "      Mapping: $mapping_csv"
     echo "      Report:  $mapping_report"
-    echo "      Done -> $site_out"
+    echo "      Done -> $site_out  [site: $(step_elapsed $site_start), total: +$(elapsed)]"
 done
 
 echo ""
@@ -178,3 +202,4 @@ echo "════════════════════════�
 cat "$SUMMARY_FILE"
 echo "══════════════════════════════════════════════"
 echo "Summary: $SUMMARY_FILE"
+echo "Total elapsed: $(elapsed)"

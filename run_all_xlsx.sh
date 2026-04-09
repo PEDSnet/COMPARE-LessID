@@ -28,13 +28,23 @@ SUMMARY_FILE="$OUT_BASE/xlsx_summary.txt"
 
 mkdir -p "$OUT_BASE"
 
+pipeline_start=$(date +%s)
+elapsed() {
+    local secs=$(( $(date +%s) - pipeline_start ))
+    printf '%02d:%02d:%02d' $((secs/3600)) $(( (secs%3600)/60 )) $((secs%60))
+}
+step_elapsed() {
+    local secs=$(( $(date +%s) - $1 ))
+    printf '%dm%02ds' $((secs/60)) $((secs%60))
+}
+
 {
     echo "lessid XLSX run summary"
     echo "Generated: $(date)"
     echo "Mode: mapping.csv replacement"
     echo ""
-    printf "%-35s %8s %10s %12s\n" "Site" "Files" "Mappings" "Status"
-    printf "%-35s %8s %10s %12s\n" "----" "-----" "--------" "------"
+    printf "%-35s %8s %10s %8s %12s\n" "Site" "Files" "Mappings" "Time" "Status"
+    printf "%-35s %8s %10s %8s %12s\n" "----" "-----" "--------" "----" "------"
 } > "$SUMMARY_FILE"
 
 for site_drnoc in "$CPT_BASE"/*/drnoc; do
@@ -44,13 +54,13 @@ for site_drnoc in "$CPT_BASE"/*/drnoc; do
 
     if [ -f "$site_out/_xlsx_completed" ] && [ "$FORCE" -eq 0 ]; then
         echo "[SKIP] $site_name xlsx already done."
-        printf "%-35s %8s %10s %12s\n" "$site_name" "-" "-" "SKIPPED" >> "$SUMMARY_FILE"
+        printf "%-35s %8s %10s %8s %12s\n" "$site_name" "-" "-" "-" "SKIPPED" >> "$SUMMARY_FILE"
         continue
     fi
 
     if [ ! -f "$mapping_csv" ]; then
         echo "[WARN] $site_name has no mapping.csv, skipping xlsx."
-        printf "%-35s %8s %10s %12s\n" "$site_name" "-" "-" "NO MAPPING" >> "$SUMMARY_FILE"
+        printf "%-35s %8s %10s %8s %12s\n" "$site_name" "-" "-" "-" "NO MAPPING" >> "$SUMMARY_FILE"
         continue
     fi
 
@@ -59,15 +69,16 @@ for site_drnoc in "$CPT_BASE"/*/drnoc; do
     xlsx_files=("$site_drnoc"/*.xlsx)
     if [ ! -f "${xlsx_files[0]}" ]; then
         echo "[WARN] No xlsx files found for $site_name, skipping."
-        printf "%-35s %8s %10s %12s\n" "$site_name" "0" "-" "NO XLSX" >> "$SUMMARY_FILE"
+        printf "%-35s %8s %10s %8s %12s\n" "$site_name" "0" "-" "-" "NO XLSX" >> "$SUMMARY_FILE"
         continue
     fi
 
     echo ""
     echo "══════════════════════════════════════════════"
-    echo " Site: $site_name"
+    echo " Site: $site_name  [+$(elapsed) total]"
     echo " Mapping: $mapping_csv"
     echo "══════════════════════════════════════════════"
+    site_start=$(date +%s)
 
     processed=0
     for xlsx_file in "$site_drnoc"/*.xlsx; do
@@ -81,9 +92,9 @@ for site_drnoc in "$CPT_BASE"/*/drnoc; do
 
     mapping_count=$(awk -F, 'NR>1{n++} END{print n+0}' "$mapping_csv")
     touch "$site_out/_xlsx_completed"
-    printf "%-35s %8s %10s %12s\n" "$site_name" "$processed" "$mapping_count" "OK" >> "$SUMMARY_FILE"
+    printf "%-35s %8s %10s %8s %12s\n" "$site_name" "$processed" "$mapping_count" "$(step_elapsed $site_start)" "OK" >> "$SUMMARY_FILE"
 
-    echo "  Done -> $site_out"
+    echo "  Done -> $site_out  [$(step_elapsed $site_start)]"
 done
 
 echo ""
@@ -91,6 +102,7 @@ echo "════════════════════════�
 cat "$SUMMARY_FILE"
 echo "══════════════════════════════════════════════"
 echo "Summary: $SUMMARY_FILE"
+echo "Total elapsed: $(elapsed)"
 
 # ── Verification pass ──────────────────────────────────────────────────────
 echo ""
