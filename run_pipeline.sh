@@ -34,6 +34,7 @@ elapsed() {
     local secs=$(( $(date +%s) - pipeline_start ))
     printf '%02d:%02d:%02d' $((secs/3600)) $(( (secs%3600)/60 )) $((secs%60))
 }
+ts() { printf '[%s] ' "$(date +%H:%M:%S)"; }
 
 LOG_DIR="/tmp/lessid_logs"
 mkdir -p "$LOG_DIR"
@@ -79,7 +80,7 @@ source "$VENV_DIR/bin/activate"
 echo "╔══════════════════════════════════════════════╗"
 echo "║           lessid pipeline starting           ║"
 echo "╠══════════════════════════════════════════════╣"
-echo "║  Started:   $(date)"
+echo "║  Started:   $(date '+%Y-%m-%d %H:%M:%S')"
 [ -n "$FORCE_FLAG" ] && echo "║  Mode:      FORCE (reprocessing all sites)"
 [ -z "$FORCE_FLAG" ] && echo "║  Mode:      resume (skipping completed sites)"
 [ "$RUN_CPT"  -eq 1 ] && echo "║  Phase 1:   CPT   → $CPT_LOG"
@@ -93,6 +94,7 @@ phase_start=$(date +%s)
 if [ "$RUN_CPT" -eq 1 ]; then
     echo "┌──────────────────────────────────────────────┐"
     echo "│  Phase 1: CPT processing                     │"
+    echo "│  Start: $(date '+%H:%M:%S')                              │"
     echo "└──────────────────────────────────────────────┘"
 
     bash "$LESSID_DIR/run_all_sites.sh" $FORCE_FLAG 2>&1 | tee "$CPT_LOG"
@@ -105,12 +107,14 @@ if [ "$RUN_CPT" -eq 1 ]; then
     if [ "$cpt_exit" -ne 0 ]; then
         echo "╔══════════════════════════════════════════════╗"
         echo "║  Phase 1 FAILED after ${cpt_time}                    ║"
+        echo "║  Failed at: $(date '+%H:%M:%S')                          ║"
         echo "║  Log: $CPT_LOG"
         echo "╚══════════════════════════════════════════════╝"
         exit "$cpt_exit"
     fi
     echo "┌──────────────────────────────────────────────┐"
     echo "│  Phase 1 complete  (${cpt_time})                   │"
+    echo "│  Finished: $(date '+%H:%M:%S')                           │"
     echo "└──────────────────────────────────────────────┘"
     echo ""
 fi
@@ -120,6 +124,7 @@ if [ "$RUN_XLSX" -eq 1 ]; then
     phase_start=$(date +%s)
     echo "┌──────────────────────────────────────────────┐"
     echo "│  Phase 2: XLSX processing + verification     │"
+    echo "│  Start: $(date '+%H:%M:%S')                              │"
     echo "└──────────────────────────────────────────────┘"
 
     bash "$LESSID_DIR/run_all_xlsx.sh" $FORCE_FLAG 2>&1 | tee "$XLSX_LOG"
@@ -132,12 +137,14 @@ if [ "$RUN_XLSX" -eq 1 ]; then
     if [ "$xlsx_exit" -ne 0 ]; then
         echo "╔══════════════════════════════════════════════╗"
         echo "║  Phase 2 FAILED after ${xlsx_time}                   ║"
+        echo "║  Failed at: $(date '+%H:%M:%S')                          ║"
         echo "║  Log: $XLSX_LOG"
         echo "╚══════════════════════════════════════════════╝"
         exit "$xlsx_exit"
     fi
     echo "┌──────────────────────────────────────────────┐"
     echo "│  Phase 2 complete  (${xlsx_time})                   │"
+    echo "│  Finished: $(date '+%H:%M:%S')                           │"
     echo "└──────────────────────────────────────────────┘"
     echo ""
 fi
@@ -149,7 +156,7 @@ total_time=$(printf '%02d:%02d:%02d' $((total_elapsed/3600)) $(( (total_elapsed%
 echo "╔══════════════════════════════════════════════╗"
 echo "║           lessid pipeline complete           ║"
 echo "╠══════════════════════════════════════════════╣"
-echo "║  Finished:    $(date)"
+echo "║  Finished:    $(date '+%Y-%m-%d %H:%M:%S')"
 echo "║  Total time:  ${total_time}"
 [ "$RUN_CPT"  -eq 1 ] && echo "║  CPT log:     $CPT_LOG"
 [ "$RUN_XLSX" -eq 1 ] && echo "║  XLSX log:    $XLSX_LOG"

@@ -37,6 +37,7 @@ step_elapsed() {
     local secs=$(( $(date +%s) - $1 ))
     printf '%dm%02ds' $((secs/60)) $((secs%60))
 }
+ts() { printf '[%s] ' "$(date +%H:%M:%S)"; }
 
 {
     echo "lessid XLSX run summary"
@@ -76,6 +77,7 @@ for site_drnoc in "$CPT_BASE"/*/drnoc; do
     echo ""
     echo "══════════════════════════════════════════════"
     echo " Site: $site_name  [+$(elapsed) total]"
+    echo " Start: $(date '+%Y-%m-%d %H:%M:%S')"
     echo " Mapping: $mapping_csv"
     echo "══════════════════════════════════════════════"
     site_start=$(date +%s)
@@ -85,7 +87,7 @@ for site_drnoc in "$CPT_BASE"/*/drnoc; do
         [ -f "$xlsx_file" ] || continue
         xlsx_basename="$(basename "$xlsx_file")"
         out_xlsx="$site_out/$xlsx_basename"
-        echo "  $xlsx_basename"
+        $(ts)echo "  $xlsx_basename"
         python3 "$MAP_XLSX" "$mapping_csv" "$xlsx_file" "$out_xlsx"
         processed=$((processed + 1))
     done
@@ -94,7 +96,7 @@ for site_drnoc in "$CPT_BASE"/*/drnoc; do
     touch "$site_out/_xlsx_completed"
     printf "%-35s %8s %10s %8s %12s\n" "$site_name" "$processed" "$mapping_count" "$(step_elapsed $site_start)" "OK" >> "$SUMMARY_FILE"
 
-    echo "  Done -> $site_out  [$(step_elapsed $site_start)]"
+    $(ts)echo "  Done -> $site_out  [$(step_elapsed $site_start)]"
 done
 
 echo ""
