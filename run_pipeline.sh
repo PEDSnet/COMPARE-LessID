@@ -41,6 +41,41 @@ timestamp=$(date +%Y%m%d_%H%M%S)
 CPT_LOG="$LOG_DIR/cpt_${timestamp}.log"
 XLSX_LOG="$LOG_DIR/xlsx_${timestamp}.log"
 
+# ── Python venv setup ───────────────────────────────────────────────────────
+VENV_DIR="$LESSID_DIR/venv"
+VENV_PYTHON="$VENV_DIR/bin/python3"
+REQUIREMENTS="$LESSID_DIR/requirements.txt"
+
+if [ ! -f "$VENV_PYTHON" ]; then
+    echo "ERROR: Python venv not found at $VENV_DIR"
+    echo "       Create it with: python3 -m venv $VENV_DIR"
+    echo "                  then: $VENV_DIR/bin/pip install -r $REQUIREMENTS"
+    exit 1
+fi
+
+# Check every package listed in requirements.txt is importable
+if [ -f "$REQUIREMENTS" ]; then
+    missing_pkgs=()
+    while IFS='==' read -r pkg _version || [ -n "$pkg" ]; do
+        pkg="$(echo "$pkg" | tr -d '[:space:]')"
+        [ -z "$pkg" ] || [[ "$pkg" == \#* ]] && continue
+        if ! "$VENV_PYTHON" -c "import $pkg" 2>/dev/null; then
+            missing_pkgs+=("$pkg")
+        fi
+    done < "$REQUIREMENTS"
+
+    if [ "${#missing_pkgs[@]}" -gt 0 ]; then
+        echo "ERROR: The following packages from requirements.txt are missing in the venv:"
+        for p in "${missing_pkgs[@]}"; do echo "         - $p"; done
+        echo "       Run: $VENV_DIR/bin/pip install -r $REQUIREMENTS"
+        exit 1
+    fi
+fi
+
+# Activate for subprocesses
+# shellcheck source=venv/bin/activate
+source "$VENV_DIR/bin/activate"
+
 echo "╔══════════════════════════════════════════════╗"
 echo "║           lessid pipeline starting           ║"
 echo "╠══════════════════════════════════════════════╣"
