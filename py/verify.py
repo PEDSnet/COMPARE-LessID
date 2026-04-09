@@ -33,7 +33,7 @@ src_drnoc   = os.path.join(CPT_BASE,    SITE, "drnoc")
 out_dir     = os.path.join(OUT_BASE,    SITE)
 mapping_csv = os.path.join(LOOKUP_BASE, SITE, "mapping.csv")
 
-MAPPED_PATTERN = re.compile(r'^(PAT|ENC|PRV|FAC|ID)_\d{8}$')
+MAPPED_PATTERN = re.compile(r'^(PAT|ENC|PRV|FAC|ID)_[A-Z0-9]+_\d{8}$')
 
 XLSX_COLUMN_MAP = {
     "patient id":      "patid",

@@ -151,12 +151,15 @@ for name in sorted(os.listdir(XLSX_DIR)):
 # Deterministic assignment order
 ordered = sorted(pairs, key=lambda t: (prefix_for(t[0]), t[0], t[1]))
 
+# Site code: everything before the first underscore (e.g. "C7LC" from "C7LC_compare_deq_q01")
+site_code = SITE_NAME.split("_")[0].upper()
+
 prefix_counters = {}
 rows = []
 for col, val in ordered:
     pfx = prefix_for(col)
     prefix_counters[pfx] = prefix_counters.get(pfx, 0) + 1
-    new_id = f"{pfx}_{prefix_counters[pfx]:08d}"
+    new_id = f"{pfx}_{site_code}_{prefix_counters[pfx]:08d}"
     rows.append((col, val, new_id))
 
 os.makedirs(os.path.dirname(MAPPING_CSV), exist_ok=True)
