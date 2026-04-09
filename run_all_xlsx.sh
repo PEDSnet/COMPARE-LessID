@@ -87,7 +87,7 @@ for site_drnoc in "$CPT_BASE"/*/drnoc; do
         [ -f "$xlsx_file" ] || continue
         xlsx_basename="$(basename "$xlsx_file")"
         out_xlsx="$site_out/$xlsx_basename"
-        $(ts)echo "  $xlsx_basename"
+        echo "$(ts)  $xlsx_basename"
         python3 "$MAP_XLSX" "$mapping_csv" "$xlsx_file" "$out_xlsx"
         processed=$((processed + 1))
     done
@@ -96,7 +96,7 @@ for site_drnoc in "$CPT_BASE"/*/drnoc; do
     touch "$site_out/_xlsx_completed"
     printf "%-35s %8s %10s %8s %12s\n" "$site_name" "$processed" "$mapping_count" "$(step_elapsed $site_start)" "OK" >> "$SUMMARY_FILE"
 
-    $(ts)echo "  Done -> $site_out  [$(step_elapsed $site_start)]"
+    echo "$(ts)  Done -> $site_out  [$(step_elapsed $site_start)]"
 done
 
 echo ""

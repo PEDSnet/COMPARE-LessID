@@ -131,7 +131,7 @@ for site_drnoc in "$CPT_BASE"/*/drnoc; do
     site_start=$(date +%s)
 
     step_start=$(date +%s)
-    $(ts)echo "[1/5] proc cimport..."
+    echo "$(ts)[1/5] proc cimport..."
     sas -nodms -stdio <<EOF
 libname outlib "$sas7bdat_dir";
 proc cimport infile="$cpt_file" library=outlib;
@@ -139,27 +139,27 @@ run;
 EOF
 
     table_count=$(ls "$sas7bdat_dir"/*.sas7bdat 2>/dev/null | wc -l)
-    $(ts)echo "      Extracted $table_count datasets  ($(step_elapsed $step_start))"
+    echo "$(ts)      Extracted $table_count datasets  ($(step_elapsed $step_start))"
 
     step_start=$(date +%s)
-    $(ts)echo "[2/5] Collecting CPT ID values..."
+    echo "$(ts)[2/5] Collecting CPT ID values..."
     sas -print "$mapped_dir/collect_ids.lst" -log "$mapped_dir/collect_ids.log" \
         -initstmt "%let input_lib_path = $sas7bdat_dir; %let output_csv = $cpt_ids_csv;" \
         "$LESSID_DIR/sas/collect_site_ids.sas"
-    $(ts)echo "      Done  ($(step_elapsed $step_start))"
+    echo "$(ts)      Done  ($(step_elapsed $step_start))"
 
     step_start=$(date +%s)
-    $(ts)echo "[3/5] Building per-site mapping (CPT + XLSX)..."
+    echo "$(ts)[3/5] Building per-site mapping (CPT + XLSX)..."
     python3 "$LESSID_DIR/py/build_site_mapping.py" \
         "$site_name" \
         "$cpt_ids_csv" \
         "$site_drnoc" \
         "$mapping_csv" \
         "$mapping_report"
-    $(ts)echo "      Done  ($(step_elapsed $step_start))"
+    echo "$(ts)      Done  ($(step_elapsed $step_start))"
 
     step_start=$(date +%s)
-    $(ts)echo "[4/5] Applying mapping to CPT datasets..."
+    echo "$(ts)[4/5] Applying mapping to CPT datasets..."
     pushd "$LESSID_DIR" > /dev/null
     bash run.sh \
         "$sas7bdat_dir/*.sas7bdat" \
@@ -168,10 +168,10 @@ EOF
         "sas7bdat" \
         "0"
     popd > /dev/null
-    $(ts)echo "      Done  ($(step_elapsed $step_start))"
+    echo "$(ts)      Done  ($(step_elapsed $step_start))"
 
     step_start=$(date +%s)
-    $(ts)echo "[5/5] proc cport -> mapped CPT..."
+    echo "$(ts)[5/5] proc cport -> mapped CPT..."
     out_cpt="$site_out/${cpt_stem}.cpt"
     sas -nodms -stdio <<EOF
 libname inlib "$mapped_dir";
@@ -193,9 +193,9 @@ EOF
     CURRENT_SAS7BDAT_DIR=""
     CURRENT_MAPPED_DIR=""
 
-    $(ts)echo "      Mapping: $mapping_csv"
-    $(ts)echo "      Report:  $mapping_report"
-    $(ts)echo "      Done -> $site_out  [site: $(step_elapsed $site_start), total: +$(elapsed)]"
+    echo "$(ts)      Mapping: $mapping_csv"
+    echo "$(ts)      Report:  $mapping_report"
+    echo "$(ts)      Done -> $site_out  [site: $(step_elapsed $site_start), total: +$(elapsed)]"
 done
 
 echo ""
