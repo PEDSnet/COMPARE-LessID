@@ -6,21 +6,6 @@
 /* Determine date_shift_days, default to 0 if not provided */
 %let date_shift_days = %sysfunc(ifc(%symexist(date_shift_days), &date_shift_days, 0));
 
-%let id_columns =
-"addressid", "conditionid",
-"diagnosisid", "dispensingid", "encounterid",
-"facilityid", "geocodeid", "immunizationid",
-"lab_facilityid", "lab_result_cm_id", "labhistoryid",
-"medadmin_providerid", "medadminid",
-"obsclin_providerid", "obsclinid", "obsgen_providerid",
-"obsgenid", "org_patid",
-"patid", "person_id", "prescribingid",
-"pro_cm_id", "proceduresid", "providerid",
-"raw_siteid", "rx_providerid", "trial_siteid",
-"trialid", "visit_id", "vitalid",
-"vx_providerid",
-"med_id";
-
 /* Read original data */
 data original_data;
     set "&input_path";
@@ -43,23 +28,38 @@ data mapping_data;
     keep column_key original_key new_id;
 run;
 
-/* Find which ID columns actually exist in this dataset */
+/* Discover remap columns:
+     remap_id    — name ends with 'id' (case-insensitive)
+     remap_label — specific named columns: site, pro_response_text, vx_lot_num
+   Redact columns are excluded from remapping even if they match the pattern. */
 proc sql noprint;
     select lowcase(name)
-        into :id_cols_found separated by ' '
+        into :remap_cols separated by ' '
     from dictionary.columns
     where libname='WORK'
           and memname='ORIGINAL_DATA'
-          and lowcase(name) in (&id_columns);
+          and prxmatch('/id$/i', strip(name))
+          and lowcase(strip(name)) not in ('participant id');
 quit;
-%let id_col_count = &sqlobs;
+%let remap_col_count = &sqlobs;
 
-/* Apply mapping via a hash object — O(1) per lookup regardless of mapping size.
-   The hash is loaded once into memory; every row then does a direct key lookup.
-   Unmapped non-null values become missing (visible as data quality issue). */
-%if &id_col_count > 0 %then %do;
+/* Discover redact columns — values are blanked entirely:
+     redact_value — ^raw_ | trial_invite_code | provider_npi | result_text$ | zip9$ */
+proc sql noprint;
+    select lowcase(name)
+        into :redact_cols separated by ' '
+    from dictionary.columns
+    where libname='WORK'
+          and memname='ORIGINAL_DATA'
+          and prxmatch('/^raw_|^trial_invite_code$|^provider_npi$|result_text$|zip9$/i', strip(name));
+quit;
+%let redact_col_count = &sqlobs;
+
+/* Apply mapping via a hash object — O(1) per lookup regardless of mapping size. */
+%if &remap_col_count > 0 or &redact_col_count > 0 %then %do;
 
     data mapped_data;
+        %if &remap_col_count > 0 %then %do;
         if _N_ = 1 then do;
             /* Pre-declare hash variables to avoid uninitialized warnings */
             length column_key $64 original_key $256 new_id $64;
@@ -70,14 +70,21 @@ quit;
             h.defineData('new_id');
             h.defineDone();
         end;
+        %end;
 
         set original_data;
 
+        /* Remap: look up each column using its canonical alias key */
         %let _i = 1;
-        %do %while (%scan(&id_cols_found, &_i, %str( )) ne );
-            %let _col = %scan(&id_cols_found, &_i, %str( ));
+        %do %while (%scan(&remap_cols, &_i, %str( )) ne );
+            %let _col = %scan(&remap_cols, &_i, %str( ));
+            /* alias_attributes: provider-role columns share the providerid mapping key */
+            %if &_col = medadmin_providerid or &_col = obsgen_providerid or
+                &_col = obsclin_providerid  or &_col = rx_providerid    or
+                &_col = vx_providerid %then %let _key = providerid;
+            %else %let _key = &_col;
             if not missing(&_col) then do;
-                column_key = "&_col";
+                column_key = "&_key";
                 original_key = cats(&_col);
                 if h.find() = 0 then &_col = new_id;
                 else call missing(&_col);
@@ -85,12 +92,20 @@ quit;
             %let _i = %eval(&_i + 1);
         %end;
 
+        /* Redact: blank these columns entirely */
+        %let _j = 1;
+        %do %while (%scan(&redact_cols, &_j, %str( )) ne );
+            %let _rcol = %scan(&redact_cols, &_j, %str( ));
+            call missing(&_rcol);
+            %let _j = %eval(&_j + 1);
+        %end;
+
         drop column_key original_key new_id;
     run;
 
 %end;
 %else %do;
-    /* No ID columns present — pass through unchanged */
+    /* No columns to process — pass through unchanged */
     data mapped_data;
         set original_data;
     run;
