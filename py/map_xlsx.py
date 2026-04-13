@@ -6,6 +6,8 @@ import warnings
 import datetime
 import openpyxl
 import openpyxl.descriptors.base as _openpyxl_base
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from rules import is_remap_col, is_redact_col, mapping_col
 
 if len(sys.argv) != 4:
     print("Usage: map_xlsx.py <mapping.csv> <input.xlsx> <output.xlsx>")
@@ -14,22 +16,6 @@ if len(sys.argv) != 4:
 MAPPING_CSV = sys.argv[1]
 INPUT_PATH = sys.argv[2]
 OUTPUT_PATH = sys.argv[3]
-
-ID_COLUMNS = {
-    "addressid", "conditionid",
-    "diagnosisid", "dispensingid", "encounterid",
-    "facilityid", "geocodeid", "immunizationid",
-    "lab_facilityid", "lab_result_cm_id", "labhistoryid",
-    "medadmin_providerid", "medadminid",
-    "obsclin_providerid", "obsclinid", "obsgen_providerid",
-    "obsgenid", "org_patid",
-    "patid", "person_id", "prescribingid",
-    "pro_cm_id", "proceduresid", "providerid",
-    "raw_siteid", "rx_providerid", "trial_siteid",
-    "trialid", "visit_id", "vitalid",
-    "vx_providerid",
-    "med_id",
-}
 
 # Translates COMPARE study XLSX column headers (lowercased) to CDM column names
 XLSX_COLUMN_MAP = {
@@ -94,21 +80,27 @@ for ws in wb.worksheets:
         continue
 
     headers = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1))]
-    id_cols = []
+    remap_cols = []   # (col_idx, canonical_mapping_key)
+    redact_cols = []  # col_idx only
     for i, h in enumerate(headers):
         if h is None:
             continue
-        col = str(h).strip().lower()
-        if col in ID_COLUMNS:
-            id_cols.append((i, col))
-        elif col in XLSX_COLUMN_MAP:
-            id_cols.append((i, XLSX_COLUMN_MAP[col]))
+        raw_col = str(h).strip().lower()
+        cdm = XLSX_COLUMN_MAP.get(raw_col, raw_col)
+        if is_redact_col(cdm):
+            redact_cols.append(i)
+        elif is_remap_col(cdm):
+            remap_cols.append((i, mapping_col(cdm)))
 
-    if not id_cols:
+    if not remap_cols and not redact_cols:
         continue
 
     for row in ws.iter_rows(min_row=2):
-        for i, col in id_cols:
+        for i in redact_cols:
+            if row[i].value is not None and row[i].value != "":
+                row[i].value = ""
+                replaced += 1
+        for i, col in remap_cols:
             v = norm(row[i].value)
             if not v:
                 continue

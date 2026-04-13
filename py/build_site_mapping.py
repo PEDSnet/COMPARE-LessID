@@ -6,6 +6,8 @@ import warnings
 import datetime
 import openpyxl
 import openpyxl.descriptors.base as _openpyxl_base
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from rules import is_remap_col, mapping_col, prefix_for
 
 if len(sys.argv) != 6:
     print("Usage: build_site_mapping.py <site_name> <cpt_ids_csv> <xlsx_dir> <mapping_csv> <report_txt>")
@@ -16,22 +18,6 @@ CPT_IDS_CSV = sys.argv[2]
 XLSX_DIR = sys.argv[3]
 MAPPING_CSV = sys.argv[4]
 REPORT_TXT = sys.argv[5]
-
-ID_COLUMNS = {
-    "addressid", "conditionid",
-    "diagnosisid", "dispensingid", "encounterid",
-    "facilityid", "geocodeid", "immunizationid",
-    "lab_facilityid", "lab_result_cm_id", "labhistoryid",
-    "medadmin_providerid", "medadminid",
-    "obsclin_providerid", "obsclinid", "obsgen_providerid",
-    "obsgenid", "org_patid",
-    "patid", "person_id", "prescribingid",
-    "pro_cm_id", "proceduresid", "providerid",
-    "raw_siteid", "rx_providerid", "trial_siteid",
-    "trialid", "visit_id", "vitalid",
-    "vx_providerid",
-    "med_id",
-}
 
 # Translates COMPARE study XLSX column headers (lowercased) to CDM column names
 XLSX_COLUMN_MAP = {
@@ -68,19 +54,6 @@ def norm(v):
     return s if s else None
 
 
-def prefix_for(column_name):
-    c = column_name.lower()
-    if c in {"patid", "person_id", "org_patid"}:
-        return "PAT"
-    if c in {"encounterid", "visit_id"}:
-        return "ENC"
-    if c == "providerid" or c.endswith("_providerid"):
-        return "PRV"
-    if c in {"facilityid", "lab_facilityid", "raw_siteid", "trial_siteid"}:
-        return "FAC"
-    return "ID"
-
-
 pairs = set()  # (column_lower, original_value)
 cpt_pairs = 0
 xlsx_pairs = 0
@@ -96,9 +69,9 @@ if os.path.exists(CPT_IDS_CSV):
             if not col or not val:
                 continue
             col = col.lower()
-            if col not in ID_COLUMNS:
+            if not is_remap_col(col):
                 continue
-            key = (col, val)
+            key = (mapping_col(col), val)
             if key not in pairs:
                 pairs.add(key)
                 cpt_pairs += 1
@@ -129,11 +102,10 @@ for name in sorted(os.listdir(XLSX_DIR)):
         for i, h in enumerate(headers):
             if h is None:
                 continue
-            col = str(h).strip().lower()
-            if col in ID_COLUMNS:
-                id_idx.append((i, col))
-            elif col in XLSX_COLUMN_MAP:
-                id_idx.append((i, XLSX_COLUMN_MAP[col]))
+            raw_col = str(h).strip().lower()
+            cdm = XLSX_COLUMN_MAP.get(raw_col, raw_col)
+            if is_remap_col(cdm):
+                id_idx.append((i, mapping_col(cdm)))
 
         if not id_idx:
             continue
