@@ -1,0 +1,83 @@
+# lessid configuration file
+# Copy this file to config/lessid.toml and fill in the real paths.
+# config/lessid.toml is gitignored and should never be committed.
+#
+# Bootstrap:
+#   cp config/lessid.example.toml config/lessid.toml
+#   # then edit config/lessid.toml with your actual paths
+
+# ── Paths ───────────────────────────────────────────────────────────────────
+[paths]
+# Directory containing per-site CPT source folders (each with a drnoc/ subdir)
+cpt_base    = "/data/sas_queries/<study_owner>/<study>/
+
+# Directory where de-identified CPT outputs are written (one subdir per site)
+out_base    = "/data/sas_queries/<your_user>/lessid_drnoc"
+
+# RESTRICTED: Directory where per-site mapping CSVs are stored (contains raw IDs)
+lookup_base = "/data/sas_queries/<your_user>/lessid_lookup"
+
+# Working directory for intermediate SAS datasets
+work_base   = "/data/sas_queries/<your_user>/lessid_work"
+
+# Root of this lessid repository
+lessid_dir  = "/home/<your_user>/lessid"
+
+# Path to the SAS executable.
+# When running in Docker with SAS bind-mounted from the host, set this to the
+# mount path, e.g. "/host/sas/SASFoundation/9.4/bin/sas_u8"
+sas_bin     = "sas"
+
+# ── Processing ──────────────────────────────────────────────────────────────
+[processing]
+# Date shift in days applied to all date/datetime columns.
+# Set to 0 to disable date shifting.
+date_shift_days = 0
+
+# Explicit list of sites to process. Leave empty to process all sites
+# found under cpt_base automatically.
+# Example: sites = ["C7LC_compare_deq_q01", "C7CCHMC_compare_deq_q01"]
+sites = []
+
+# If true, reprocess sites even if a _cpt_completed marker file exists.
+force = false
+
+# Number of sites to process in parallel.
+# Each site runs in its own process; SAS is safe to parallelize per-site
+# since each has its own working directory.
+parallel = 4
+
+# ── Column selection ────────────────────────────────────────────────────────
+[columns]
+# Columns (lowercased) that end in 'id' but must NOT be remapped.
+# These are values that look like IDs but carry no identifying information
+# (e.g. trial enrollment codes, data mart identifiers).
+remap_never = [
+    "participantid",
+    "datamartid",
+]
+
+# Additional columns to remap that do NOT end in 'id'.
+# Useful for label-style columns that still contain site-linkable values.
+remap_extra = []
+
+# Columns ending in 'id' to explicitly exclude from remapping.
+# Takes precedence over the id$ pattern match.
+remap_exclude = []
+
+# Alias groups: columns that should share the same mapping key.
+# Format: canonical_column = ["alias1", "alias2", ...]
+# The canonical column's mapping is used for all aliases in the group,
+# so the same original value gets the same new ID regardless of which
+# column it appeared in.
+#
+# Example (disabled by default — uncomment if your data has these columns):
+# [columns.aliases]
+# providerid = [
+#     "medadmin_providerid",
+#     "obsgen_providerid",
+#     "obsclin_providerid",
+#     "rx_providerid",
+#     "vx_providerid",
+# ]
+[columns.aliases]
