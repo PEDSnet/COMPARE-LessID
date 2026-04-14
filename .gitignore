@@ -10,3 +10,6 @@ run_pipeline.out
 *.log
 *.lst
 
+# Config with real paths — never commit
+config/lessid.toml
+
