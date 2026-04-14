@@ -1,0 +1,30 @@
+services:
+  lessid:
+    build: .
+    image: lessid:latest
+
+    # ── Volume mounts ────────────────────────────────────────────────────────
+    volumes:
+      # Runtime config (required — copy and edit from config/lessid.example.toml)
+      - ./config/lessid.toml:/app/config/lessid.toml:ro
+
+      # Data directories — edit paths to match your host layout.
+      # These should match what you put in config/lessid.toml [paths].
+      - ${CPT_BASE}:/data/cpt:ro
+      - ${OUT_BASE}:/data/output
+      - ${LOOKUP_BASE}:/data/lookup
+      - ${WORK_BASE}:/data/work
+
+      # SAS bind-mount (required — SAS 9.4 must be installed on the host).
+      # Set [paths] sas_bin in lessid.toml to point to the binary inside
+      # this mount, e.g. "/host_sas/SASFoundation/9.4/bin/sas_u8".
+      - ${SAS_HOME:-/usr/local/SAS}:/host_sas:ro
+
+    # ── Default command ──────────────────────────────────────────────────────
+    # Override at runtime: docker compose run lessid run --yes
+    command: ["--help"]
+
+    # ── Environment (optional) ───────────────────────────────────────────────
+    # Values set here take precedence over the toml config.
+    # environment:
+    #   SAS_BIN: /host_sas/SASFoundation/9.4/bin/sas_u8
