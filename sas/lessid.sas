@@ -32,6 +32,7 @@ run;
      remap_id    — name ends with 'id' (case-insensitive)
      remap_label — specific named columns: site, pro_response_text, vx_lot_num
    Redact columns are excluded from remapping even if they match the pattern. */
+%let remap_cols = ;
 proc sql noprint;
     select lowcase(name)
         into :remap_cols separated by ' '
@@ -45,6 +46,7 @@ quit;
 
 /* Discover redact columns — values are blanked entirely:
      redact_value — ^raw_ | trial_invite_code | provider_npi | result_text$ | zip9$ */
+%let redact_cols = ;
 proc sql noprint;
     select lowcase(name)
         into :redact_cols separated by ' '
