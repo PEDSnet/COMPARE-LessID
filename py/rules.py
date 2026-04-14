@@ -17,7 +17,7 @@ import re
 REMAP_ID_RE = re.compile(r'id$', re.IGNORECASE)
 
 # Specific columns to remap that don't match the id$ pattern
-REMAP_LABEL = frozenset({'site', 'pro_response_text', 'vx_lot_num'})
+REMAP_LABEL = frozenset({'pro_response_text', 'vx_lot_num'})
 
 # Values in these columns are blanked rather than replaced with a new ID
 REDACT_RE = re.compile(
@@ -28,7 +28,8 @@ REDACT_RE = re.compile(
 # Column names (lowercased) that look like IDs but must NOT be remapped.
 # "participant id" is a trial enrolment number, not a CDM patient identifier.
 REMAP_NEVER = frozenset({
-    'participant id',
+    'participantid',
+    'datamartid'
 })
 
 # ── Aliases ─────────────────────────────────────────────────────────────────
