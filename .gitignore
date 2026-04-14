@@ -1,3 +1,12 @@
-__pycache__
-venv
+__pycache__/
+*.pyc
+venv/
 .env
+
+# Generated outputs — not source
+remap_cols.csv
+scan_cols_output.txt
+run_pipeline.out
+*.log
+*.lst
+
