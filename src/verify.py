@@ -12,11 +12,10 @@ import os
 import re
 import sys
 import warnings
-import datetime
 import openpyxl
-import openpyxl.descriptors.base as _openpyxl_base
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rules import is_remap_col, is_redact_col, mapping_col
+from rules import is_remap_col, is_redact_col, mapping_col, XLSX_COLUMN_MAP, patch_openpyxl
+patch_openpyxl()
 
 if len(sys.argv) != 2:
     print("Usage: verify.py <site_name>")
@@ -36,30 +35,6 @@ out_dir     = os.path.join(OUT_BASE,    SITE)
 mapping_csv = os.path.join(LOOKUP_BASE, SITE, "mapping.csv")
 
 MAPPED_PATTERN = re.compile(r'^(PAT|ENC|PRV|FAC|ID)_[A-Z0-9]+_\d{8}$')
-
-XLSX_COLUMN_MAP = {
-    "patient id":      "patid",
-    "encounter id":    "encounterid",
-    "diagnosis id":    "diagnosisid",
-    "lab result id":   "lab_result_cm_id",
-    "med id":          "med_id",
-    "c_patid":         "patid",
-    "c_trialid":       "trialid",
-    "c_partid":        "trialid",
-    "e_partid":        "trialid",
-    "c_siteid":        "trial_siteid",
-    "e_siteid":        "trial_siteid",
-}
-
-# openpyxl compatibility patch
-_orig_convert = _openpyxl_base._convert
-def _patched_convert(expected_type, value):
-    if (expected_type is datetime.datetime
-            and isinstance(value, datetime.date)
-            and not isinstance(value, datetime.datetime)):
-        return datetime.datetime.combine(value, datetime.time.min)
-    return _orig_convert(expected_type, value)
-_openpyxl_base._convert = _patched_convert
 
 # ── Checks ─────────────────────────────────────────────────────────────────
 

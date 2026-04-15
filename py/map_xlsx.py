@@ -3,11 +3,10 @@ import csv
 import sys
 import os
 import warnings
-import datetime
 import openpyxl
-import openpyxl.descriptors.base as _openpyxl_base
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rules import is_remap_col, is_redact_col, mapping_col
+from rules import is_remap_col, is_redact_col, mapping_col, XLSX_COLUMN_MAP, norm, patch_openpyxl
+patch_openpyxl()
 
 if len(sys.argv) != 4:
     print("Usage: map_xlsx.py <mapping.csv> <input.xlsx> <output.xlsx>")
@@ -16,41 +15,6 @@ if len(sys.argv) != 4:
 MAPPING_CSV = sys.argv[1]
 INPUT_PATH = sys.argv[2]
 OUTPUT_PATH = sys.argv[3]
-
-# Translates COMPARE study XLSX column headers (lowercased) to CDM column names
-XLSX_COLUMN_MAP = {
-    "patient id":      "patid",
-    "encounter id":    "encounterid",
-    "diagnosis id":    "diagnosisid",
-    "lab result id":   "lab_result_cm_id",
-    "med id":          "med_id",
-    "c_patid":         "patid",
-    "c_trialid":       "trialid",
-    "c_partid":        "trialid",
-    "e_partid":        "trialid",
-    "c_siteid":        "trial_siteid",
-    "e_siteid":        "trial_siteid",
-}
-
-
-def norm(v):
-    if v is None:
-        return None
-    s = str(v).strip()
-    return s if s else None
-
-
-# workbook compatibility patch
-_orig_convert = _openpyxl_base._convert
-
-def _patched_convert(expected_type, value):
-    if (expected_type is datetime.datetime
-            and isinstance(value, datetime.date)
-            and not isinstance(value, datetime.datetime)):
-        return datetime.datetime.combine(value, datetime.time.min)
-    return _orig_convert(expected_type, value)
-
-_openpyxl_base._convert = _patched_convert
 
 # load mapping
 mapping = {}

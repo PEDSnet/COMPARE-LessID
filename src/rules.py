@@ -124,6 +124,55 @@ def prefix_for(col: str) -> str:
     return 'ID'
 
 
+# ── Shared XLSX utilities ────────────────────────────────────────────────────
+# Single source of truth for all scripts that read or write XLSX files.
+
+# Maps lowercased XLSX column headers to CDM column names used by the rules.
+# Columns that resolve to a REMAP_NEVER name (participantid, datamartid,
+# trialid) will be silently skipped by is_remap_col().
+XLSX_COLUMN_MAP: dict[str, str] = {
+    "patient id":      "patid",
+    "encounter id":    "encounterid",
+    "diagnosis id":    "diagnosisid",
+    "lab result id":   "lab_result_cm_id",
+    "med id":          "med_id",
+    "c_patid":         "patid",
+    "c_trialid":       "trialid",
+    # REMAP_NEVER columns — spaced header variants and raw c_/e_ variants
+    "participant id":  "participantid",
+    "datamart id":     "datamartid",
+    "c_partid":        "participantid",
+    "e_partid":        "participantid",
+    "c_siteid":        "trial_siteid",
+    "e_siteid":        "trial_siteid",
+}
+
+# Patient-identifier column names (CDM) used to identify patid columns in XLSX
+PAT_ID_NAMES: frozenset[str] = frozenset({'patid', 'person_id', 'org_patid'})
+
+
+def norm(v) -> 'str | None':
+    """Normalise a cell value: strip whitespace, return None if empty."""
+    if v is None:
+        return None
+    s = str(v).strip()
+    return s if s else None
+
+
+def patch_openpyxl() -> None:
+    """Apply openpyxl date/datetime compat fix. Safe to call multiple times."""
+    import datetime
+    import openpyxl.descriptors.base as _base
+    _orig = _base._convert
+    def _patched(expected_type, value):
+        if (expected_type is datetime.datetime
+                and isinstance(value, datetime.date)
+                and not isinstance(value, datetime.datetime)):
+            return datetime.datetime.combine(value, datetime.time.min)
+        return _orig(expected_type, value)
+    _base._convert = _patched
+
+
 def load_paths() -> dict:
     """Return the [paths] section from config/lessid.toml, or {}."""
     repo_root = Path(__file__).parent.parent

@@ -3,11 +3,10 @@ import csv
 import os
 import sys
 import warnings
-import datetime
 import openpyxl
-import openpyxl.descriptors.base as _openpyxl_base
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rules import is_remap_col, mapping_col, prefix_for
+from rules import is_remap_col, mapping_col, prefix_for, XLSX_COLUMN_MAP, norm, patch_openpyxl
+patch_openpyxl()
 
 if len(sys.argv) != 6:
     print("Usage: build_site_mapping.py <site_name> <cpt_ids_csv> <xlsx_dir> <mapping_csv> <report_txt>")
@@ -20,41 +19,6 @@ MAPPING_CSV = sys.argv[4]
 REPORT_TXT = sys.argv[5]
 
 # Translates COMPARE study XLSX column headers (lowercased) to CDM column names
-XLSX_COLUMN_MAP = {
-    "patient id":      "patid",
-    "encounter id":    "encounterid",
-    "diagnosis id":    "diagnosisid",
-    "lab result id":   "lab_result_cm_id",
-    "med id":          "med_id",
-    "c_patid":         "patid",
-    "c_trialid":       "trialid",
-    # participant ID columns — map to participantid which is in REMAP_NEVER
-    "c_partid":        "participantid",
-    "e_partid":        "participantid",
-    "c_siteid":        "trial_siteid",
-    "e_siteid":        "trial_siteid",
-}
-
-# Ensure the same workbook compatibility behavior used elsewhere
-_orig_convert = _openpyxl_base._convert
-
-def _patched_convert(expected_type, value):
-    if (expected_type is datetime.datetime
-            and isinstance(value, datetime.date)
-            and not isinstance(value, datetime.datetime)):
-        return datetime.datetime.combine(value, datetime.time.min)
-    return _orig_convert(expected_type, value)
-
-_openpyxl_base._convert = _patched_convert
-
-
-def norm(v):
-    if v is None:
-        return None
-    s = str(v).strip()
-    return s if s else None
-
-
 pairs = set()  # (column_lower, original_value)
 cpt_pairs = 0
 xlsx_pairs = 0
