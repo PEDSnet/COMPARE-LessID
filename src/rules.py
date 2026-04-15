@@ -56,7 +56,10 @@ REDACT_RE = re.compile(
 )
 
 # Column names (lowercased) that look like IDs but must NOT be remapped.
-_default_never = {'participantid', 'datamartid'}
+# - participantid: trial enrolment number, not a CDM patient identifier
+# - datamartid: identifies the data mart, not a person
+# - trialid: study label (always 'PT_COMPARE'), not a person identifier
+_default_never = {'participantid', 'datamartid', 'trialid'}
 REMAP_NEVER: frozenset[str] = frozenset(
     c.lower() for c in _cfg.get('remap_never', _default_never)
 )

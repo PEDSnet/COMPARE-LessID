@@ -48,8 +48,9 @@ XLSX_COLUMN_MAP = {
     "med id":          "med_id",
     "c_patid":         "patid",
     "c_trialid":       "trialid",
-    "c_partid":        "trialid",
-    "e_partid":        "trialid",
+    # participant ID columns — map to participantid which is in REMAP_NEVER
+    "c_partid":        "participantid",
+    "e_partid":        "participantid",
     "c_siteid":        "trial_siteid",
     "e_siteid":        "trial_siteid",
 }
