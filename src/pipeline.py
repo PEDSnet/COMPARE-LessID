@@ -378,6 +378,12 @@ def run_site_xlsx(site_name: str, cfg: dict, force: bool = False) -> dict:
                 str(out_xlsx),
             ], check=True)
 
+        # Copy logs and PDFs from source drnoc folder alongside the XLSX outputs
+        import shutil as _shutil
+        for ext in ('*.log', '*.pdf'):
+            for src_file in sorted(site_drnoc.glob(ext)):
+                _shutil.copy2(src_file, site_out / src_file.name)
+
         mapping_count = _count_csv_rows(mapping_csv)
         (site_out / '_xlsx_completed').touch()
 

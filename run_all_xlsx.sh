@@ -98,6 +98,13 @@ for site_drnoc in "$CPT_BASE"/*/drnoc; do
         processed=$((processed + 1))
     done
 
+    # Copy logs and PDFs from source drnoc folder alongside the XLSX outputs
+    for src_file in "$site_drnoc"/*.log "$site_drnoc"/*.pdf; do
+        [ -f "$src_file" ] || continue
+        cp "$src_file" "$site_out/$(basename "$src_file")"
+        echo "$(ts)  $(basename "$src_file")  [copied]"
+    done
+
     mapping_count=$(awk -F, 'NR>1{n++} END{print n+0}' "$mapping_csv")
     touch "$site_out/_xlsx_completed"
     printf "%-35s %8s %10s %8s %12s\n" "$site_name" "$processed" "$mapping_count" "$(step_elapsed $site_start)" "OK" >> "$SUMMARY_FILE"
