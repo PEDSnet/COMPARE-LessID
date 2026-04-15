@@ -365,6 +365,11 @@ def run_site_xlsx(site_name: str, cfg: dict, force: bool = False) -> dict:
     try:
         for xlsx_file in xlsx_files:
             out_xlsx = site_out / xlsx_file.name
+            # EDC discrepancy files contain raw EDC data and must not be de-identified
+            if 'edc_discrepancies' in xlsx_file.name.lower():
+                import shutil
+                shutil.copy2(xlsx_file, out_xlsx)
+                continue
             subprocess.run([
                 sys.executable,
                 str(py_dir / 'map_xlsx.py'),

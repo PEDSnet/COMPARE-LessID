@@ -86,6 +86,12 @@ for site_drnoc in "$CPT_BASE"/*/drnoc; do
     for xlsx_file in "$site_drnoc"/*.xlsx; do
         [ -f "$xlsx_file" ] || continue
         xlsx_basename="$(basename "$xlsx_file")"
+        # EDC discrepancy files contain raw EDC data and must not be de-identified
+        if [[ "$xlsx_basename" == *edc_discrepancies* ]]; then
+            echo "$(ts)  $xlsx_basename  [SKIP — edc_discrepancies]"
+            cp "$xlsx_file" "$site_out/$xlsx_basename"
+            continue
+        fi
         out_xlsx="$site_out/$xlsx_basename"
         echo "$(ts)  $xlsx_basename"
         python3 "$MAP_XLSX" "$mapping_csv" "$xlsx_file" "$out_xlsx"
