@@ -150,14 +150,16 @@ Commands inside the REPL:
 
 ---
 
-## Docker
+## Podman
 
-SAS 9.4 cannot be included in the Docker image (licensing). The image is Python-only; SAS is accessed via a bind-mount of the host SAS installation.
+SAS 9.4 cannot be included in the image (licensing). The image is Python-only; SAS is accessed via a bind-mount of the host SAS installation.
+
+> **Note:** `podman compose` is not available on this server. Use `podman run` directly.
 
 ### Build
 
 ```bash
-docker build -t lessid .
+podman build -t lessid .
 ```
 
 ### Configure
@@ -169,24 +171,24 @@ Set `sas_bin` in `config/lessid.toml` to the path **inside the container** where
 sas_bin = "/host_sas/SASFoundation/9.4/bin/sas_u8"
 ```
 
-### Run with docker compose
+### Run
 
 ```bash
-# Set host paths in your shell (or in a local .env that docker compose reads)
-export CPT_BASE=/data/sas_queries/owner/study
-export OUT_BASE=/data/sas_queries/you/lessid_drnoc
-export LOOKUP_BASE=/data/sas_queries/you/lessid_lookup
-export WORK_BASE=/data/sas_queries/you/lessid_work
-export SAS_HOME=/usr/local/SAS   # host SAS install dir (default)
-
-docker compose run --rm lessid run --yes
+podman run --rm \
+  -v /path/to/config/lessid.toml:/app/config/lessid.toml:ro \
+  -v "$CPT_BASE":/data/cpt:ro \
+  -v "$OUT_BASE":/data/output \
+  -v "$LOOKUP_BASE":/data/lookup \
+  -v "$WORK_BASE":/data/work \
+  -v "${SAS_HOME:-/usr/local/SAS}":/host_sas:ro \
+  lessid run --yes
 ```
 
 Or pass a custom command:
 
 ```bash
-docker compose run --rm lessid verify
-docker compose run --rm lessid spotcheck C7LC_compare_deq_q01
+podman run --rm [...same mounts...] lessid verify
+podman run --rm [...same mounts...] lessid spotcheck C7LC_compare_deq_q01
 ```
 
 ---

@@ -5,10 +5,10 @@
 # to the mounted SAS binary (e.g. /host_sas/SASFoundation/9.4/bin/sas_u8).
 #
 # Build:
-#   docker build -t lessid .
+#   podman build -t lessid .
 #
 # Run (minimal):
-#   docker run --rm \
+#   podman run --rm \
 #     -v /path/to/config/lessid.toml:/app/config/lessid.toml:ro \
 #     -v /data/cpt:/data/cpt:ro \
 #     -v /data/output:/data/output \
