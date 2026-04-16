@@ -58,6 +58,15 @@ HOST_CONFIG="$(dirname "$0")/config/lessid.toml"
 
 [[ "${1:-}" == "spotcheck" ]] && TTY_FLAGS="-it" || TTY_FLAGS=""
 
+# Auto-capture log for run/verify — written to HOST_OUTPUT/logs/ alongside the data
+if [[ "${1:-}" == "run" || "${1:-}" == "verify" ]]; then
+    _logdir="${HOST_OUTPUT}/logs"
+    mkdir -p "${_logdir}"
+    _logfile="${_logdir}/lessid_${1}_$(date +%Y%m%d_%H%M%S).log"
+    echo "Logging to: ${_logfile}" >&2
+    exec > >(tee "${_logfile}") 2>&1
+fi
+
 podman run --rm ${TTY_FLAGS} \
     -v "${HOST_CONFIG}:/app/config/lessid.toml:ro" \
     -v "${HOST_SOURCE}:/data/source:ro" \
