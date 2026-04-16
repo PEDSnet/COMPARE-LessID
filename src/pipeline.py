@@ -630,7 +630,7 @@ def run(ctx, sites_opt, force, yes, n_parallel, cpt_only, xlsx_only):
     # ── Spot-check hints ──
     click.echo('\nSpot-check commands:')
     for s in sites:
-        click.echo(f'  python src/pipeline.py spotcheck {s}')
+        click.echo(f'  ./run_lessid.sh spotcheck {s}')
     click.echo()
 
 
