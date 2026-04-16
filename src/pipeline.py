@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 lessid pipeline CLI — replaces run_all_sites.sh / run_all_xlsx.sh.
 
@@ -13,7 +14,7 @@ Common flags
 ------------
   --force / -f            Reprocess even if _cpt_completed / _xlsx_completed marker exists
   --yes / -y              Skip confirmation prompt before running
-  --parallel N            Process N sites concurrently (default: 1, sequential)
+  --parallel N            Process N sites concurrently (default: max(2, cpu_count-8))
   --config PATH           Path to lessid.toml  (default: config/lessid.toml in repo root)
 """
 
@@ -30,6 +31,16 @@ import click
 
 # Repo root — pipeline.py lives in src/
 _REPO_ROOT = Path(__file__).parent.parent
+
+# Default set of PCORNet CDM tables inspected by `pipeline audit`.
+# Override via [columns] known_tables in lessid.toml.
+KNOWN_TABLES = (
+    'DEMOGRAPHIC', 'ENROLLMENT', 'ENCOUNTER', 'DIAGNOSIS', 'PROCEDURES', 'VITAL',
+    'DISPENSING', 'LAB_RESULT_CM', 'CONDITION', 'PRO_CM', 'PRESCRIBING',
+    'PCORNET_TRIAL', 'DEATH', 'DEATH_CAUSE', 'MED_ADMIN', 'PROVIDER',
+    'OBS_CLIN', 'OBS_GEN', 'HASH_TOKEN', 'LDS_ADDRESS_HISTORY', 'IMMUNIZATION',
+    'HARVEST', 'LAB_HISTORY', 'PAT_RELATIONSHIP', 'EXTERNAL_MEDS',
+)
 
 
 # ── Config loading ───────────────────────────────────────────────────────────
@@ -64,6 +75,24 @@ def _load_env(env_path: Path) -> dict[str, str]:
             v = v.strip().strip('"').strip("'")
             result[k] = v
     return result
+
+
+def _default_parallel() -> int:
+    n = os.cpu_count()
+    if n <= 2:
+        return 1
+    if n <= 4:
+        return max(2, n - 1)
+    if n <= 8:
+        return max(2, n - 2)
+    return max(2, n - 8)
+
+
+def _resolve_parallel(value) -> int:
+    """Resolve the parallel setting — accepts int or the string 'max'."""
+    if str(value).strip().lower() == 'max' or value is None:
+        return _default_parallel()
+    return int(value)
 
 
 def load_config(cfg_path: str | None = None) -> dict:
@@ -104,11 +133,14 @@ def load_config(cfg_path: str | None = None) -> dict:
     }
     processing = {
         'force':           raw.get('processing', {}).get('force', False),
-        'parallel':        int(raw.get('processing', {}).get('parallel', 1)),
+        'parallel':        _resolve_parallel(raw.get('processing', {}).get('parallel')),
         'sites':           raw.get('processing', {}).get('sites', []),
         'date_shift_days': int(raw.get('processing', {}).get('date_shift_days', 0)),
     }
-    cfg = {'paths': paths, 'processing': processing, 'columns': raw.get('columns', {})}
+    raw_cols = dict(raw.get('columns', {}))
+    if 'known_tables' not in raw_cols:
+        raw_cols['known_tables'] = list(KNOWN_TABLES)
+    cfg = {'paths': paths, 'processing': processing, 'columns': raw_cols}
     return cfg
 
 
@@ -534,13 +566,13 @@ def run(ctx, sites_opt, force, yes, n_parallel, cpt_only, xlsx_only):
         sys.exit(1)
 
     effective_force = force or cfg['processing']['force']
-    n_workers = n_parallel if n_parallel is not None else cfg['processing']['parallel']
+    n_workers = _resolve_parallel(n_parallel) if n_parallel is not None else cfg['processing']['parallel']
 
     click.echo(f'\nlessid pipeline')
     click.echo('=' * 50)
     click.echo(f'  Sites:    {len(sites)}')
     click.echo(f'  Force:    {effective_force}')
-    click.echo(f'  Parallel: {n_workers}')
+    click.echo(f'  Parallel: {n_workers} worker(s)  (cpu_count={os.cpu_count()})')
     click.echo(f'  CPT:      {not xlsx_only}')
     click.echo(f'  XLSX:     {not cpt_only}')
     click.echo(f'  Sites:\n' + '\n'.join(f'    • {s}' for s in sites))
@@ -667,6 +699,160 @@ def spotcheck(ctx, site):
         [sys.executable, str(spotcheck_script), site],
         env,
     )
+
+
+# ── audit ────────────────────────────────────────────────────────────────────
+
+@cli.command()
+@click.argument('sites', nargs=-1, metavar='[SITE]...')
+@click.option('--output', '-o', default=None, metavar='FILE',
+              help='Write results to a CSV file in addition to stdout')
+@click.pass_context
+def audit(ctx, sites, output):
+    """List all ID columns that will be remapped, across all (or selected) sites.
+
+    Reads each site's CPT file via SAS to discover column names.
+    Useful for auditing which columns are affected before running the pipeline.
+    """
+    import importlib.util
+    import glob
+    import shutil
+    import tempfile
+    import subprocess as _sp
+    from collections import defaultdict
+
+    cfg = ctx.obj['cfg']
+    paths = cfg['paths']
+    _validate_paths(paths)
+
+    # Load rules
+    rules_path = Path(__file__).parent / 'rules.py'
+    if not rules_path.exists():
+        rules_path = _REPO_ROOT / 'py' / 'rules.py'
+    spec = importlib.util.spec_from_file_location('rules', rules_path)
+    rules_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rules_mod)
+
+    cpt_base = paths['cpt_base']
+    sas_bin  = paths['sas_bin']
+    known_tables = [t.upper() for t in cfg['columns']['known_tables']]
+
+    def _find_cpt(site_name: str) -> str | None:
+        pattern = f"{cpt_base}/{site_name}/drnoc/*.cpt"
+        files = sorted(glob.glob(pattern))
+        return files[-1] if files else None
+
+    def _cols_from_cpt(cpt_file: str) -> list[tuple[str, str]]:
+        tmp = tempfile.mkdtemp()
+        tables_in = ', '.join(f"'{t}'" for t in known_tables)
+        sas_prog = tempfile.NamedTemporaryFile(suffix='.sas', delete=False, mode='w')
+        sas_log  = sas_prog.name.replace('.sas', '.log')
+        sas_prog.write(f"""\
+libname src "{tmp}";
+proc cimport infile="{cpt_file}" library=src; run;
+proc sql noprint;
+    create table _meta as
+    select upcase(memname) as memname, name
+    from dictionary.columns
+    where libname='SRC' and upcase(memname) in ({tables_in})
+    order by memname, name;
+quit;
+data _null_; set _meta; put 'COLMETA table=' memname +(-1) ' col=' name; run;
+proc datasets library=src kill nolist; run; quit;
+libname src clear;
+""")
+        sas_prog.flush()
+        sas_prog.close()
+        _sp.run([sas_bin, '-nodms', '-log', sas_log, sas_prog.name], capture_output=True)
+        found_tables: set[str] = set()
+        cols = []
+        if os.path.exists(sas_log):
+            with open(sas_log) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line.startswith('COLMETA '):
+                        continue
+                    parts = {}
+                    for tok in line[len('COLMETA '):].split():
+                        k, _, v = tok.partition('=')
+                        parts[k] = v
+                    if 'table' in parts and 'col' in parts:
+                        found_tables.add(parts['table'])
+                        cols.append((parts['table'], parts['col'].lower()))
+        missing_tables = [t for t in known_tables if t not in found_tables]
+        if missing_tables:
+            click.echo(f"    (not in CPT: {', '.join(missing_tables)})", err=True)
+        shutil.rmtree(tmp, ignore_errors=True)
+        try:
+            os.unlink(sas_prog.name)
+            os.unlink(sas_log)
+        except OSError:
+            pass
+        return cols
+
+    site_list = list(sites) or resolve_sites(cfg, ())
+    click.echo(f"Scanning {len(site_list)} site(s)...", err=True)
+
+    col_sites: dict[tuple[str, str], set[str]] = defaultdict(set)
+    col_meta:  dict[tuple[str, str], dict]     = {}
+    scanned: list[str] = []
+
+    for site_name in site_list:
+        cpt_file = _find_cpt(site_name)
+        if not cpt_file:
+            click.echo(f"  SKIP {site_name}: no CPT file found", err=True)
+            continue
+        click.echo(f"  {site_name}: {cpt_file}", err=True)
+        scanned.append(site_name)
+        for table, col in _cols_from_cpt(cpt_file):
+            if rules_mod.is_remap_col(col):
+                key = (table, col)
+                col_sites[key].add(site_name)
+                if key not in col_meta:
+                    col_meta[key] = {
+                        'prefix':      rules_mod.prefix_for(col),
+                        'mapping_key': rules_mod.mapping_col(col),
+                    }
+
+    all_site_set = set(scanned)
+    remap_rows = []
+    for (table, col), sites_with in sorted(col_sites.items()):
+        if sites_with == all_site_set:
+            site_label = 'all'
+        elif len(sites_with) == 1:
+            site_label = next(iter(sites_with))
+        else:
+            site_label = ';'.join(sorted(sites_with))
+        remap_rows.append({
+            'table':       table,
+            'column':      col,
+            'prefix':      col_meta[(table, col)]['prefix'],
+            'mapping_key': col_meta[(table, col)]['mapping_key'],
+            'sites':       site_label,
+        })
+
+    click.echo()
+    click.echo(f"{'TABLE':<28} {'COLUMN':<35} {'PREFIX':<8} {'SITES':<12} MAPPING KEY")
+    click.echo('─' * 100)
+    cur_table = None
+    for r in remap_rows:
+        if r['table'] != cur_table:
+            if cur_table is not None:
+                click.echo()
+            cur_table = r['table']
+        alias_note = f"  → key: {r['mapping_key']}" if r['mapping_key'] != r['column'] else ''
+        click.echo(f"  {r['table']:<26} {r['column']:<35} {r['prefix']:<8} {r['sites']:<12}{alias_note}")
+
+    n_tables = len({r['table'] for r in remap_rows})
+    click.echo()
+    click.echo(f"Total: {len(remap_rows)} columns across {n_tables} table(s), {len(scanned)} site(s)")
+
+    if output:
+        with open(output, 'w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=['table', 'column', 'prefix', 'mapping_key', 'sites'])
+            writer.writeheader()
+            writer.writerows(remap_rows)
+        click.echo(f"CSV written to {output}", err=True)
 
 
 if __name__ == '__main__':
