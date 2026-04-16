@@ -35,7 +35,7 @@ HOST_CONFIG="$(dirname "$0")/config/lessid.toml"
 
 # ── Container invocation ─────────────────────────────────────────────────────
 
-sudo podman run --rm \
+podman run --rm \
     -v "${HOST_CONFIG}:/app/config/lessid.toml:ro" \
     -v "${HOST_SOURCE}:/data/source:ro" \
     -v "${HOST_OUTPUT}:/data/output" \

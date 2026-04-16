@@ -21,7 +21,32 @@ Each site gets its own `mapping.csv` so surrogate IDs are stable across re-runs 
 | Requirement | Notes |
 |---|---|
 | **SAS 9.4** | Must be installed and licensed on the host machine. The pipeline calls the `sas` binary via subprocess. |
-| **Podman 4+** | Primary runtime. Python is only required for local development (see below). |
+| **Podman 4+** | Primary runtime. **No sudo required.** Python is only required for local development (see below). |
+
+### One-time Podman storage setup (per user, pedsdb08)
+
+By default, Podman stores images in `/var/lib/containers/storage` which is small and will fill up. Each user must redirect storage to `/data` **once** before building:
+
+```bash
+# 1. Create your personal image store (no sudo needed — /data/containers is world-writable with sticky bit)
+mkdir -p /data/containers/$USER
+
+# 2. Point Podman at it
+mkdir -p ~/.config/containers
+cat > ~/.config/containers/storage.conf << 'EOF'
+[storage]
+driver = "overlay"
+graphroot = "/data/containers/$USER"
+EOF
+# Substitute your actual username — $USER won't expand inside single-quoted heredoc:
+sed -i "s|\$USER|$USER|g" ~/.config/containers/storage.conf
+
+# 3. Verify
+cat ~/.config/containers/storage.conf
+# Should show: graphroot = "/data/containers/yourname"
+```
+
+You only need to do this once. After that, `podman build` and `podman run` work without sudo.
 
 ---
 
@@ -31,37 +56,32 @@ SAS 9.4 cannot be included in the image (licensing). The image is Python-only; S
 
 ### Build
 
-```bash
-# With sudo (simplest — no subuid/subgid setup required):
-sudo podman build -t lessid .
+Each user builds their own local copy of the image (~145 MB, ~1 min):
 
-# Rootless also works if subuid/subgid are configured:
-#   sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $USER
-#   podman system migrate
+```bash
 podman build -t lessid .
 ```
 
+> **Note:** Images are stored per-user in rootless Podman — other users on the same server cannot see or share your image. Each person runs `podman build` once.
+
 ### Configure
 
-Copy the example config and fill in your paths:
+Copy the example config. Paths here are **container-internal** — the host-to-container mapping is in `run_lessid.sh` (see Run below):
 
 ```bash
 cp config/lessid.example.toml config/lessid.toml
-# then edit config/lessid.toml
 ```
 
 `config/lessid.toml` is **gitignored** — it contains absolute paths and must never be committed.
 
-Set `sas_bin` to the path **inside the container** where SAS will be bind-mounted:
-
 ```toml
 [paths]
-cpt_base    = "/data/sas_queries/<owner>/<study>"
-out_base    = "/data/sas_queries/<you>/lessid_drnoc"
-lookup_base = "/data/sas_queries/<you>/lessid_lookup"
-work_base   = "/data/sas_queries/<you>/lessid_work"
-lessid_dir  = "/home/<you>/lessid"
-sas_bin     = "/host_sas/SASFoundation/9.4/bin/sas_u8"
+cpt_base    = "/data/source"    # bind-mounted from HOST_SOURCE in run_lessid.sh
+out_base    = "/data/output"
+lookup_base = "/data/lookup"
+work_base   = "/data/work"
+lessid_dir  = "/app"            # repo root inside the container
+sas_bin     = "/host_sas"       # bind-mounted SAS binary
 
 [processing]
 date_shift_days = 0       # set >0 to enable per-patient date perturbation (future projects)
@@ -71,15 +91,18 @@ sites           = []      # leave empty to auto-discover all sites
 
 ### Run
 
+Copy the wrapper script and fill in your host paths (this file is gitignored):
+
 ```bash
-sudo podman run --rm \
-  -v /path/to/config/lessid.toml:/app/config/lessid.toml:ro \
-  -v "$CPT_BASE":/data/cpt:ro \
-  -v "$OUT_BASE":/data/output \
-  -v "$LOOKUP_BASE":/data/lookup \
-  -v "$WORK_BASE":/data/work \
-  -v "${SAS_HOME:-/usr/local/SAS}":/host_sas:ro \
-  lessid run --yes
+cp run_lessid.example.sh run_lessid.sh
+# edit HOST_* variables in run_lessid.sh
+```
+
+The wrapper auto-detects your SAS binary via `which sas` and bind-mounts everything. Then:
+
+```bash
+./run_lessid.sh plan          # dry run — no execution
+./run_lessid.sh run --yes     # full pipeline
 ```
 
 ### Subcommands

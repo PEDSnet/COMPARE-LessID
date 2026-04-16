@@ -6,7 +6,7 @@
 # container at /host_sas.  sas_bin in lessid.toml must be "/host_sas".
 #
 # Build:
-#   sudo podman build -t lessid .
+#   podman build -t lessid .
 #
 # Run:
 #   cp run_lessid.example.sh run_lessid.sh
