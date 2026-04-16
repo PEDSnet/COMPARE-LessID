@@ -622,6 +622,13 @@ def run(ctx, sites_opt, force, yes, n_parallel, cpt_only, xlsx_only):
         verify_rows = [[r['site'], r['status']] for r in verify_results]
         _print_summary_table(['Site', 'Status'], verify_rows, 'Verify results')
 
+        # Remove resume-markers for sites that passed verify — they've served their purpose
+        for r in verify_results:
+            if r['status'] == 'OK':
+                site_out = Path(paths['out_base']) / r['site']
+                for marker in ('_cpt_completed', '_xlsx_completed'):
+                    (site_out / marker).unlink(missing_ok=True)
+
     click.echo(f'\nTotal elapsed: {_fmt_elapsed(time.time() - t_total)}')
 
     # ── Spot-check hints ──
