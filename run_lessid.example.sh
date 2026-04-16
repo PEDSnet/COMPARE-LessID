@@ -26,10 +26,11 @@ HOST_LOOKUP="/data/sas_queries/<your_user>/lessid_lookup"
 # Working directory for intermediate SAS datasets
 HOST_WORK="/data/sas_queries/<your_user>/lessid_work"
 
-# SAS installation root on this host
-HOST_SAS="/data/sas_home/SASFoundation/9.4"
+# SAS binary on this host (auto-detected; override if needed)
+HOST_SAS=$(which sas 2>/dev/null) || { echo "ERROR: sas not found on PATH. Install SAS or set HOST_SAS manually."; exit 1; }
+HOST_SAS=$(readlink -f "${HOST_SAS}")  # resolve any wrapper symlink
 
-# Path to lessid.toml (real config with these host paths filled in)
+# Path to lessid.toml (real config — uses generic container paths)
 HOST_CONFIG="$(dirname "$0")/config/lessid.toml"
 
 # ── Container invocation ─────────────────────────────────────────────────────

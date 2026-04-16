@@ -28,7 +28,7 @@ lessid_dir  = "/app"
 # Path to the SAS executable inside the container.
 # SAS is not installed in the image — bind-mount the host SAS installation
 # and set this to the mounted binary (see compose.example.yml).
-sas_bin     = "/host_sas/bin/sas_u8"
+sas_bin     = "/host_sas"
 
 # ── Processing ──────────────────────────────────────────────────────────────
 [processing]

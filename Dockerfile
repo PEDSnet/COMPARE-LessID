@@ -1,8 +1,9 @@
 # lessid — Python de-identification layer
 #
 # SAS 9.4 is NOT included in this image.  It must be licensed to the host
-# machine and bind-mounted in.  Set sas_bin in config/lessid.toml to point
-# to the mounted SAS binary (e.g. /host_sas/SASFoundation/9.4/bin/sas_u8).
+# machine.  The run_lessid.sh wrapper auto-detects the SAS binary via
+# `which sas`, resolves it with readlink -f, and bind-mounts it into the
+# container at /host_sas.  sas_bin in lessid.toml must be "/host_sas".
 #
 # Build:
 #   sudo podman build -t lessid .
