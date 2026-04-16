@@ -7,9 +7,9 @@ A Python + SAS pipeline for de-identifying CDM (Common Data Model) datasets for 
 ## Overview
 
 ```
-CPT (SAS transport)  ──┐
+CPT (SAS transport)   ──┐
                         ├─► collect IDs ──► build mapping ──► apply mapping ──► de-identified CPT
-XLSX reports       ──┘                                    └──► de-identified XLSX
+XLSX reports          ──┘                                  └──► de-identified XLSX
 ```
 
 Each site gets its own `mapping.csv` so surrogate IDs are stable across re-runs and never collide across sites.
