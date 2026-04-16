@@ -21,24 +21,27 @@ Each site gets its own `mapping.csv` so surrogate IDs are stable across re-runs 
 | Requirement | Notes |
 |---|---|
 | **SAS 9.4** | Must be installed and licensed on the host machine. The pipeline calls the `sas` binary via subprocess. |
-| **Python 3.11+** | Or Python 3.9–3.10 with `tomli` installed (see below). |
+| **Podman 4+** | Primary runtime. Python is only required for local development (see below). |
 
 ---
 
-## Installation
+## Podman
+
+SAS 9.4 cannot be included in the image (licensing). The image is Python-only; SAS is accessed via a bind-mount of the host SAS installation.
+
+### Build
 
 ```bash
-git clone <repo-url> lessid
-cd lessid
+# With sudo (simplest — no subuid/subgid setup required):
+sudo podman build -t lessid .
 
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+# Rootless also works if subuid/subgid are configured:
+#   sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $USER
+#   podman system migrate
+podman build -t lessid .
 ```
 
----
-
-## Configuration
+### Configure
 
 Copy the example config and fill in your paths:
 
@@ -49,132 +52,27 @@ cp config/lessid.example.toml config/lessid.toml
 
 `config/lessid.toml` is **gitignored** — it contains absolute paths and must never be committed.
 
-### Key config fields
+Set `sas_bin` to the path **inside the container** where SAS will be bind-mounted:
 
 ```toml
 [paths]
-cpt_base    = "/data/sas_queries/<owner>/<study>"   # source CPT folder (one subdir per site)
-out_base    = "/data/sas_queries/<you>/lessid_drnoc" # de-identified output
-lookup_base = "/data/sas_queries/<you>/lessid_lookup" # RESTRICTED: mapping CSVs
-work_base   = "/data/sas_queries/<you>/lessid_work"   # temporary SAS datasets
-lessid_dir  = "/home/<you>/lessid"                    # this repo root
-sas_bin     = "sas"                                   # or absolute path to SAS binary
+cpt_base    = "/data/sas_queries/<owner>/<study>"
+out_base    = "/data/sas_queries/<you>/lessid_drnoc"
+lookup_base = "/data/sas_queries/<you>/lessid_lookup"
+work_base   = "/data/sas_queries/<you>/lessid_work"
+lessid_dir  = "/home/<you>/lessid"
+sas_bin     = "/host_sas/SASFoundation/9.4/bin/sas_u8"
 
 [processing]
-parallel        = 4       # sites processed concurrently
-date_shift_days = 0       # set >0 to enable date shifting
+date_shift_days = 0       # set >0 to enable per-patient date perturbation (future projects)
 sites           = []      # leave empty to auto-discover all sites
-
-[columns]
-remap_never = ["participantid", "datamartid"]  # never remap these
-remap_extra = []        # remap columns that don't match id$ pattern
-remap_exclude = []      # suppress id$-matching columns from remapping
-
-[columns.aliases]
-# providerid = ["medadmin_providerid", "rx_providerid"]  # share mapping key
-```
-
-### Environment variable fallback
-
-If `config/lessid.toml` does not exist the pipeline falls back to a `.env` file (or already-exported environment variables). This preserves backwards compatibility with the original shell-script workflow.
-
----
-
-## Running
-
-All commands are run through `src/pipeline.py`:
-
-```bash
-source venv/bin/activate
-```
-
-### `plan` — preview what will be remapped
-
-```bash
-python src/pipeline.py plan
-python src/pipeline.py plan C7LC_compare_deq_q01   # single site
-```
-
-Prints the remap/alias/exclude column rules without executing anything.
-
-### `run` — full pipeline
-
-```bash
-# Process all sites (prompts for confirmation)
-python src/pipeline.py run
-
-# Single site, skip prompt, 4 parallel workers
-python src/pipeline.py run --site C7LC_compare_deq_q01 --yes --parallel 4
-
-# Force reprocess even if already done
-python src/pipeline.py run --force --yes
-
-# CPT phase only (skip XLSX)
-python src/pipeline.py run --cpt-only --yes
-
-# XLSX + verify only (mapping already built)
-python src/pipeline.py run --xlsx-only --yes
-```
-
-The pipeline prints a summary table at each phase and lists spot-check commands on completion.
-
-### `verify` — verification pass only
-
-```bash
-python src/pipeline.py verify
-python src/pipeline.py verify --site C7LC_compare_deq_q01
-```
-
-Checks:
-- `[2]` No raw IDs leak into de-identified CPT
-- `[3]` All remap columns are present in the mapping
-- `[4]` XLSX outputs contain de-identified IDs (cross-consistency)
-- `[5]` XLSX patient IDs can be found in CPT tables
-
-### `spotcheck` — interactive REPL
-
-```bash
-python src/pipeline.py spotcheck C7LC_compare_deq_q01
-```
-
-Commands inside the REPL:
-
-| Command | Description |
-|---|---|
-| `orig <id>` | Look up the de-identified ID for a raw value |
-| `new <id>` | Reverse-look up a surrogate ID → original value |
-| `sample [n]` | Show n random mapping pairs |
-| `xlsx [file]` | Check a specific XLSX output |
-| `stats` | Print mapping counts by prefix |
-| `q` | Quit |
-
----
-
-## Podman
-
-SAS 9.4 cannot be included in the image (licensing). The image is Python-only; SAS is accessed via a bind-mount of the host SAS installation.
-
-> **Note:** `podman compose` is not available on this server. Use `podman run` directly.
-
-### Build
-
-```bash
-podman build -t lessid .
-```
-
-### Configure
-
-Set `sas_bin` in `config/lessid.toml` to the path **inside the container** where SAS will be mounted:
-
-```toml
-[paths]
-sas_bin = "/host_sas/SASFoundation/9.4/bin/sas_u8"
+# parallel omitted → auto: max(2, cpu_count-8); on pedsdb08 (32 CPUs) = 24
 ```
 
 ### Run
 
 ```bash
-podman run --rm \
+sudo podman run --rm \
   -v /path/to/config/lessid.toml:/app/config/lessid.toml:ro \
   -v "$CPT_BASE":/data/cpt:ro \
   -v "$OUT_BASE":/data/output \
@@ -184,18 +82,72 @@ podman run --rm \
   lessid run --yes
 ```
 
-Or pass a custom command:
+### Subcommands
 
-```bash
-podman run --rm [...same mounts...] lessid verify
-podman run --rm [...same mounts...] lessid spotcheck C7LC_compare_deq_q01
+| Command | Description |
+|---|---|
+| `lessid plan [SITE]` | Preview which columns will be remapped — no execution |
+| `lessid run [--site S] [--yes] [--parallel N] [--cpt-only] [--xlsx-only] [--force]` | Full pipeline: CPT → mapping → XLSX → verify |
+| `lessid verify [--site S]` | Re-run verification checks only |
+| `lessid spotcheck SITE` | Interactive REPL: look up mappings, sample pairs, check XLSX output |
+| `lessid audit [SITE...] [-o FILE]` | List all ID columns that will be remapped; optionally export to CSV |
+
+The pipeline prints the resolved worker count and a summary table at each phase:
+
+```
+lessid pipeline
+==================================================
+  Sites:    12
+  Force:    False
+  Parallel: 24 worker(s)  (cpu_count=32)
+  ...
 ```
 
 ---
 
-## Column selection
+## Local development
 
-The pipeline remaps every column whose name ends in `id` (case-insensitive), with the following exceptions and extensions:
+For development without Podman, install dependencies directly:
+
+```bash
+git clone <repo-url> lessid
+cd lessid
+
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+Then run pipeline commands via Python:
+
+```bash
+# plan
+python src/pipeline.py plan
+python src/pipeline.py plan C7LC_compare_deq_q01
+
+# run
+python src/pipeline.py run --yes
+python src/pipeline.py run --site C7LC_compare_deq_q01 --yes --parallel 4
+python src/pipeline.py run --xlsx-only --yes
+
+# verify
+python src/pipeline.py verify
+
+# spotcheck
+python src/pipeline.py spotcheck C7LC_compare_deq_q01
+
+# audit
+python src/pipeline.py audit
+python src/pipeline.py audit C7LC_compare_deq_q01 -o remap_cols.csv
+```
+
+If `config/lessid.toml` does not exist the pipeline falls back to a `.env` file (or exported environment variables) for backwards compatibility with the original shell-script workflow.
+
+---
+
+## Configuration reference
+
+### `[columns]`
 
 | Setting | Effect |
 |---|---|
@@ -204,7 +156,18 @@ The pipeline remaps every column whose name ends in `id` (case-insensitive), wit
 | `remap_extra` | Columns that don't end in `id` but should still be remapped |
 | `[columns.aliases]` | Multiple column names that share the same mapping key (e.g. all `*_providerid` variants) |
 
-ID prefix assignment:
+### `[processing]`
+
+| Setting | Default | Notes |
+|---|---|---|
+| `parallel` | `max(2, cpu_count-8)` | Omit to use the auto-default; override with an integer or `"max"` |
+| `date_shift_days` | `0` | Set to a positive integer to enable per-patient date perturbation |
+| `sites` | `[]` | Leave empty to auto-discover all sites under `cpt_base` |
+| `force` | `false` | Reprocess sites that already have a `_cpt_completed` marker |
+
+---
+
+## ID prefix assignment
 
 | Prefix | Columns |
 |---|---|
@@ -246,19 +209,4 @@ The original shell scripts are retained for reference:
 | `run_all_xlsx.sh` | `pipeline run --xlsx-only` |
 | `run_pipeline.sh` | `pipeline run` |
 
-They still work and continue to read from `.env`. Use `src/pipeline.py` for new runs.
-
----
-
-## Audit / column inventory
-
-```bash
-# List all ID-type columns across all sites
-python src/list_remap_cols.py
-
-# Save to CSV
-python src/list_remap_cols.py -o remap_cols.csv
-
-# Single site
-python src/list_remap_cols.py -o remap_cols.csv C7LC_compare_deq_q01
-```
+They still work and continue to read from `.env`. Use `src/pipeline.py` (or the Podman image) for new runs.
