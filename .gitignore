@@ -13,5 +13,6 @@ run_pipeline.out
 # Config with real paths — never commit
 config/lessid.toml
 run_lessid.sh
+run_lessid_test.sh
 
 plan-podmanSmokeTestReadmeRewrite.prompt.md
