@@ -5,17 +5,13 @@
 # to the mounted SAS binary (e.g. /host_sas/SASFoundation/9.4/bin/sas_u8).
 #
 # Build:
-#   podman build -t lessid .
+#   sudo podman build -t lessid .
 #
-# Run (minimal):
-#   podman run --rm \
-#     -v /path/to/config/lessid.toml:/app/config/lessid.toml:ro \
-#     -v /data/cpt:/data/cpt:ro \
-#     -v /data/output:/data/output \
-#     -v /data/lookup:/data/lookup \
-#     -v /data/work:/data/work \
-#     -v /usr/local/SAS:/host_sas:ro \
-#     lessid run --yes
+# Run:
+#   cp run_lessid.example.sh run_lessid.sh
+#   # edit HOST_* variables in run_lessid.sh, then:
+#   ./run_lessid.sh plan
+#   ./run_lessid.sh run --yes
 
 FROM python:3.11-slim
 
