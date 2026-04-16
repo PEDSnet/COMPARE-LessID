@@ -462,11 +462,8 @@ def run_site_verify(site_name: str, cfg: dict) -> dict:
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _find_py_dir(lessid_dir: str) -> Path:
-    """Return the scripts directory (src/ preferred over py/)."""
-    src = Path(lessid_dir) / 'src'
-    if src.exists():
-        return src
-    return Path(lessid_dir) / 'py'
+    """Return the src/ scripts directory."""
+    return Path(lessid_dir) / 'src'
 
 
 def _count_csv_rows(path: Path) -> int:

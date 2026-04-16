@@ -56,7 +56,9 @@ HOST_CONFIG="$(dirname "$0")/config/lessid.toml"
 
 # ── Container invocation ─────────────────────────────────────────────────────
 
-podman run --rm \
+[[ "${1:-}" == "spotcheck" ]] && TTY_FLAGS="-it" || TTY_FLAGS=""
+
+podman run --rm ${TTY_FLAGS} \
     -v "${HOST_CONFIG}:/app/config/lessid.toml:ro" \
     -v "${HOST_SOURCE}:/data/source:ro" \
     -v "${HOST_OUTPUT}:/data/output" \
