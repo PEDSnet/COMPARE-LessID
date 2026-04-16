@@ -12,6 +12,27 @@
 
 set -euo pipefail
 
+# ── Sudo guard ───────────────────────────────────────────────────────────────
+# Running this wrapper under sudo causes podman to write root-owned files into
+# your rootless runtime dir (/run/user/$UID/containers/), which breaks future
+# rootless executions until those files are manually removed.
+# Run as yourself: ./run_lessid.sh plan   (not: sudo ./run_lessid.sh plan)
+if [[ -n "${SUDO_USER:-}" ]]; then
+    _real_uid=$(id -u "${SUDO_USER}")
+    echo "" >&2
+    echo "WARNING: Running under sudo as ${SUDO_USER}." >&2
+    echo "         root-owned files will be written to /run/user/${_real_uid}/containers/" >&2
+    echo "         and will block future rootless podman runs for ${SUDO_USER}." >&2
+    echo "         To fix afterwards: sudo rm -rf /run/user/${_real_uid}/containers/" >&2
+    echo "         Run as yourself instead: ./run_lessid.sh plan" >&2
+    echo "" >&2
+    read -r -p "Continue anyway? [y/N] " _ans </dev/tty
+    if [[ ! "${_ans}" =~ ^[Yy]$ ]]; then
+        echo "Aborted." >&2
+        exit 1
+    fi
+fi
+
 # ── Host-side paths (edit these) ────────────────────────────────────────────
 
 # Source CPT data (read-only)
