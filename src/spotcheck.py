@@ -57,8 +57,15 @@ if len(sys.argv) != 2:
     sys.exit(1)
 
 SITE        = sys.argv[1]
-out_dir     = os.path.join(OUT_BASE,    SITE)
-mapping_csv = os.path.join(LOOKUP_BASE, SITE, "mapping.csv")
+out_dir     = os.path.join(OUT_BASE, SITE)
+
+# Mapping lives at lookup_base/{site_code}/{site_code}_mapping.csv
+_m = re.match(r'^(.+?)_compare.*?_(q\d+)$', SITE, re.IGNORECASE)
+if not _m:
+    print(warn(f"Cannot parse site code from: {SITE!r}"))
+    sys.exit(1)
+_site_code  = _m.group(1).upper()
+mapping_csv = os.path.join(LOOKUP_BASE, _site_code, f'{_site_code}_mapping.csv')
 
 if not os.path.exists(mapping_csv):
     print(warn(f"mapping.csv not found: {mapping_csv}"))

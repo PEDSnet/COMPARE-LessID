@@ -24,15 +24,21 @@ if len(sys.argv) != 2:
 
 SITE = sys.argv[1]
 
-# Paths — read from environment (set via .env loaded by the calling shell script)
-# or fall back to defaults so verify.py can also be run standalone.
-CPT_BASE    = os.environ.get("CPT_BASE",    "REDACTED:/data/sas_queries/<source_user>/compare_q01")
-OUT_BASE    = os.environ.get("OUT_BASE",    "REDACTED:/data/sas_queries/<your_user>/lessid_drnoc")
-LOOKUP_BASE = os.environ.get("LOOKUP_BASE", "REDACTED:/data/sas_queries/<your_user>/lessid_lookup")
+# Paths — read from environment (set by pipeline.py) or fall back to placeholders
+CPT_BASE    = os.environ.get("CPT_BASE",    "")
+OUT_BASE    = os.environ.get("OUT_BASE",    "")
+LOOKUP_BASE = os.environ.get("LOOKUP_BASE", "")
 
-src_drnoc   = os.path.join(CPT_BASE,    SITE, "drnoc")
-out_dir     = os.path.join(OUT_BASE,    SITE)
-mapping_csv = os.path.join(LOOKUP_BASE, SITE, "mapping.csv")
+# Mapping lives at lookup_base/{site_code}/{site_code}_mapping.csv
+_m = re.match(r'^(.+?)_compare.*?_(q\d+)$', SITE, re.IGNORECASE)
+if not _m:
+    print(f"ERROR: Cannot parse site code from: {SITE!r}")
+    sys.exit(1)
+_site_code = _m.group(1).upper()
+
+src_drnoc   = os.path.join(CPT_BASE, SITE, "drnoc")
+out_dir     = os.path.join(OUT_BASE, SITE)
+mapping_csv = os.path.join(LOOKUP_BASE, _site_code, f'{_site_code}_mapping.csv')
 
 MAPPED_PATTERN = re.compile(r'^(PAT|ENC|PRV|FAC|ID)_[A-Z0-9]+_\d{8}$')
 

@@ -157,7 +157,6 @@ def _validate_paths(paths: dict) -> None:
 
 
 # ── Site discovery ───────────────────────────────────────────────────────────
-
 def discover_sites(cpt_base: str) -> list[str]:
     base = Path(cpt_base)
     sites = []
@@ -260,9 +259,10 @@ def run_site_cpt(site_name: str, cfg: dict, force: bool = False) -> dict:
 
     site_drnoc   = Path(cpt_base) / site_name / 'drnoc'
     site_out     = Path(out_base) / site_name
-    site_lookup  = Path(lookup_base) / site_name
-    mapping_csv  = site_lookup / 'mapping.csv'
-    mapping_report = site_lookup / 'mapping_report.txt'
+    site_code, _ = _parse_site_query(site_name)
+    site_lookup  = Path(lookup_base) / site_code
+    mapping_csv  = site_lookup / f'{site_code}_mapping.csv'
+    mapping_report = site_lookup / f'{site_code}_mapping_report.txt'
 
     if (site_out / '_cpt_completed').exists() and mapping_csv.exists() and not force:
         return {'site': site_name, 'status': 'SKIPPED', 'tables': '-', 'mappings': '-',
@@ -376,7 +376,8 @@ def run_site_xlsx(site_name: str, cfg: dict, force: bool = False) -> dict:
 
     site_drnoc  = Path(cpt_base) / site_name / 'drnoc'
     site_out    = Path(out_base) / site_name
-    mapping_csv = Path(lookup_base) / site_name / 'mapping.csv'
+    site_code, _ = _parse_site_query(site_name)
+    mapping_csv = Path(lookup_base) / site_code / f'{site_code}_mapping.csv'
 
     if (site_out / '_xlsx_completed').exists() and not force:
         return {'site': site_name, 'status': 'SKIPPED', 'files': '-', 'mappings': '-',
