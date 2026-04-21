@@ -26,7 +26,7 @@ proc sql;
     from dictionary.columns
     where libname='INLIB'
       and prxmatch('/id$/i', strip(name))
-      and lowcase(strip(name)) not in ('participant id');
+      and lowcase(strip(name)) not in ('participantid', 'datamartid', 'trialid');
 quit;
 
 data id_values_long;

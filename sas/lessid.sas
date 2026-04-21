@@ -40,7 +40,7 @@ proc sql noprint;
     where libname='WORK'
           and memname='ORIGINAL_DATA'
           and prxmatch('/id$/i', strip(name))
-          and lowcase(strip(name)) not in ('participant id');
+          and lowcase(strip(name)) not in ('participantid', 'datamartid', 'trialid');
 quit;
 %let remap_col_count = &sqlobs;
 

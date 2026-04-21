@@ -6,12 +6,16 @@ Interactive spot-check for a de-identified site.
 
 Commands
 --------
-  orig <id>       Lookup what an original ID maps to
-  new  <id>       Lookup what a de-identified ID came from
-  sample [n]      Show n random sample (orig → new) pairs  [default 10]
-  xlsx [file]     Show first 15 replaced Patient IDs from an XLSX output file
-  stats           Re-print mapping statistics
-  q / quit        Exit
+  orig  <id>           Look up what an original ID maps to
+  new   <id>           Look up what a de-identified ID came from
+  sample [n] [col]     Show n random mappings for a column [default: patid, n=10]
+  xlsx  [file]         Show first 15 patient ID mappings from an XLSX output file
+  check [file]         Verify participant IDs are original; patient IDs are de-id'd
+  stats                Re-print mapping statistics
+  help / ?             Show this help
+  q / quit             Exit
+
+Aliases: o=orig  n=new  s=sample  c=check
 """
 
 import csv
@@ -21,40 +25,18 @@ import random
 import re
 import sys
 import warnings
-import datetime
 import openpyxl
-import openpyxl.descriptors.base as _openpyxl_base
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from rules import XLSX_COLUMN_MAP, PAT_ID_NAMES, patch_openpyxl
+patch_openpyxl()
 
-# ── openpyxl compat patch ───────────────────────────────────────────────────
-_orig_convert = _openpyxl_base._convert
-def _patched_convert(expected_type, value):
-    if (expected_type is datetime.datetime
-            and isinstance(value, datetime.date)
-            and not isinstance(value, datetime.datetime)):
-        return datetime.datetime.combine(value, datetime.time.min)
-    return _orig_convert(expected_type, value)
-_openpyxl_base._convert = _patched_convert
+# CDM names for ID columns that must NOT be de-identified
+PARTICIPANT_ID_CDM = {"participantid", "datamartid"}
 
 # ── Paths — read from environment or fall back to defaults ──────────────────
 CPT_BASE    = os.environ.get("CPT_BASE",    "REDACTED:/data/sas_queries/<source_user>/compare_q01")
 OUT_BASE    = os.environ.get("OUT_BASE",    "REDACTED:/data/sas_queries/<your_user>/lessid_drnoc")
 LOOKUP_BASE = os.environ.get("LOOKUP_BASE", "REDACTED:/data/sas_queries/<your_user>/lessid_lookup")
-
-XLSX_COLUMN_MAP = {
-    "patient id":      "patid",
-    "encounter id":    "encounterid",
-    "diagnosis id":    "diagnosisid",
-    "lab result id":   "lab_result_cm_id",
-    "med id":          "med_id",
-    "c_patid":         "patid",
-    "c_trialid":       "trialid",
-    "c_partid":        "trialid",
-    "e_partid":        "trialid",
-    "c_siteid":        "trial_siteid",
-    "e_siteid":        "trial_siteid",
-}
-
-PAT_ID_NAMES = {"patid", "person_id", "org_patid"}
 
 # ── Colour helpers ──────────────────────────────────────────────────────────
 GREEN  = "\033[32m"
@@ -75,8 +57,15 @@ if len(sys.argv) != 2:
     sys.exit(1)
 
 SITE        = sys.argv[1]
-out_dir     = os.path.join(OUT_BASE,    SITE)
-mapping_csv = os.path.join(LOOKUP_BASE, SITE, "mapping.csv")
+out_dir     = os.path.join(OUT_BASE, SITE)
+
+# Mapping lives at lookup_base/{site_code}/{site_code}_mapping.csv
+_m = re.match(r'^(.+?)_compare.*?_(q\d+)$', SITE, re.IGNORECASE)
+if not _m:
+    print(warn(f"Cannot parse site code from: {SITE!r}"))
+    sys.exit(1)
+_site_code  = _m.group(1).upper()
+mapping_csv = os.path.join(LOOKUP_BASE, _site_code, f'{_site_code}_mapping.csv')
 
 if not os.path.exists(mapping_csv):
     print(warn(f"mapping.csv not found: {mapping_csv}"))
@@ -141,14 +130,15 @@ def lookup_new(new_id):
     print(f"  {info(col):30s}  {ok(new_id)}  ←  {orig}")
 
 
-def show_sample(n=10):
-    """Print n random (original → mapped) pairs from the patid column."""
-    pat_pairs = [(orig, nid) for (col, orig), nid in forward.items() if col == "patid"]
-    if not pat_pairs:
-        print(warn("  No patid entries found in mapping"))
+def show_sample(n=10, col=None):
+    """Print n random (original → mapped) pairs, optionally for a specific column."""
+    label = col.lower() if col else "patid"
+    pairs = [(orig, nid) for (c, orig), nid in forward.items() if c == label]
+    if not pairs:
+        print(warn(f"  No entries found for column '{label}'"))
         return
-    sample = random.sample(pat_pairs, min(n, len(pat_pairs)))
-    print(f"\n  {hi('Random sample')} ({len(sample)} of {len(pat_pairs):,} patid mappings):")
+    sample = random.sample(pairs, min(n, len(pairs)))
+    print(f"\n  {hi('Random sample')} ({len(sample)} of {len(pairs):,} {label} mappings):")
     for orig, nid in sample:
         print(f"    {orig:40s}  →  {ok(nid)}")
 
@@ -195,7 +185,7 @@ def show_xlsx(xlsx_name=None):
             print(f"  {'Original patid':40s}  →  Mapped patid")
             print(f"  {'─' * 40}     {'─' * 40}")
             count = 0
-            for row in rows[1:]:
+            for ri, row in enumerate(rows[1:], start=1):
                 mapped = str(row[pat_idx]).strip() if row[pat_idx] is not None else ""
                 if not mapped:
                     continue
@@ -205,7 +195,7 @@ def show_xlsx(xlsx_name=None):
                     print(f"  {orig:40s}  →  {ok(mapped)}")
                     count += 1
                     if count >= 15:
-                        remaining = sum(1 for r in rows[rows.index(row)+1:] if r[pat_idx])
+                        remaining = sum(1 for r in rows[ri + 1:] if r[pat_idx])
                         if remaining:
                             print(f"  ... ({remaining} more rows not shown)")
                         break
@@ -215,9 +205,125 @@ def show_xlsx(xlsx_name=None):
             break
 
 
+def check_xlsx(xlsx_name=None):
+    """Verify participant IDs are original (not de-identified) and patient IDs are de-identified."""
+    if xlsx_name:
+        if not os.path.isabs(xlsx_name):
+            xlsx_name = os.path.join(out_dir, xlsx_name)
+        candidates = [xlsx_name] if os.path.exists(xlsx_name) else []
+    else:
+        candidates = sorted(glob.glob(os.path.join(out_dir, "*.xlsx")))
+
+    if not candidates:
+        print(warn(f"  No XLSX files found in {out_dir}"))
+        return
+
+    overall_ok = True
+    for path in candidates:
+        name = os.path.basename(path)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            try:
+                wb = openpyxl.load_workbook(path, read_only=True)
+            except Exception as e:
+                print(warn(f"  Could not open {name}: {e}"))
+                continue
+
+        for ws in wb.worksheets:
+            rows = list(ws.iter_rows(values_only=True))
+            if not rows:
+                continue
+            headers = [str(h).strip() if h is not None else "" for h in rows[0]]
+            if headers and headers[0] == "No eligible records found":
+                continue
+
+            # Participant/DataMart ID columns — values must NOT be de-identified
+            part_indices = [
+                (i, h) for i, h in enumerate(headers)
+                if XLSX_COLUMN_MAP.get(h.lower()) in PARTICIPANT_ID_CDM
+            ]
+            # Patient ID columns — values MUST be de-identified (present in reverse map)
+            pat_indices = [
+                (i, h) for i, h in enumerate(headers)
+                if XLSX_COLUMN_MAP.get(h.lower()) == "patid" or h.lower() in PAT_ID_NAMES
+            ]
+
+            if not part_indices and not pat_indices:
+                continue
+
+            part_bad = []  # (header, bad_value, (col, original)) — was incorrectly scrambled
+            pat_bad  = []  # (header, raw_value) — was NOT de-identified
+
+            for row in rows[1:]:
+                for i, h in part_indices:
+                    v = str(row[i]).strip() if row[i] is not None else ""
+                    if v and v in reverse:
+                        part_bad.append((h, v, reverse[v]))
+                for i, h in pat_indices:
+                    v = str(row[i]).strip() if row[i] is not None else ""
+                    if v and v not in reverse:
+                        pat_bad.append((h, v))
+
+            file_ok = not part_bad and not pat_bad
+            if not file_ok:
+                overall_ok = False
+            status = ok("PASS") if file_ok else warn("FAIL")
+            print(f"  {status}  {name}")
+
+            if part_bad:
+                seen: set = set()
+                unique = []
+                for item in part_bad:
+                    if item[1] not in seen:
+                        seen.add(item[1])
+                        unique.append(item)
+                print(f"    {warn('!')} {len(unique)} participant/datamart ID value(s) incorrectly de-identified:")
+                for h, v, (_, orig) in unique[:5]:
+                    print(f"        {h}: {warn(v)}  (original: {orig})")
+                if len(unique) > 5:
+                    print(f"        ... and {len(unique) - 5} more")
+            elif part_indices:
+                sample_vals = [str(rows[1][i]) for i, _ in part_indices if rows[1][i] is not None][:2]
+                print(f"    {ok('ok')} Participant/DataMart IDs look original: {sample_vals}")
+
+            if pat_bad:
+                seen2: set = set()
+                unique2 = []
+                for item in pat_bad:
+                    if item[1] not in seen2:
+                        seen2.add(item[1])
+                        unique2.append(item)
+                print(f"    {warn('!')} {len(unique2)} patient ID value(s) appear un-de-identified:")
+                for h, v in unique2[:5]:
+                    print(f"        {h}: {warn(v)}")
+            elif pat_indices:
+                print(f"    {ok('ok')} Patient IDs are de-identified")
+
+        wb.close()
+
+    print()
+    if overall_ok:
+        print(f"  {ok('All files passed.')}")
+    else:
+        print(f"  {warn('Some files have issues — see above.')}")
+
+
 # ── REPL ────────────────────────────────────────────────────────────────────
+HELP_TEXT = (
+    f"  {hi('Commands:')}\n"
+    f"    orig  <id>           Look up what an original ID maps to\n"
+    f"    new   <id>           Look up what a de-identified ID came from\n"
+    f"    sample [n] [col]     Show n random mappings [default: patid, n=10]\n"
+    f"    xlsx  [file]         Show first patient ID mappings from an XLSX file\n"
+    f"    check [file]         Verify participant IDs are original; patient IDs are de-id'd\n"
+    f"    stats                Re-print mapping statistics\n"
+    f"    help / ?             Show this help\n"
+    f"    q / quit             Exit\n"
+    f"  Aliases: o=orig  n=new  s=sample  c=check"
+)
+
 print_stats()
-print(f"\n{hi('Commands:')}  orig <id>  |  new <id>  |  sample [n]  |  xlsx [file]  |  stats  |  q")
+print(f"\n{HELP_TEXT}")
 print("─" * 70)
 
 try:
@@ -237,28 +343,35 @@ try:
 
         if cmd in ("q", "quit", "exit"):
             break
-        elif cmd == "orig":
+        elif cmd in ("h", "help", "?"):
+            print(HELP_TEXT)
+        elif cmd in ("orig", "o"):
             if not arg:
                 print(warn("  Usage: orig <original_id>"))
             else:
                 lookup_orig(arg)
-        elif cmd == "new":
+        elif cmd in ("new", "n"):
             if not arg:
                 print(warn("  Usage: new <mapped_id>"))
             else:
                 lookup_new(arg)
-        elif cmd == "sample":
+        elif cmd in ("sample", "s"):
+            parts2 = arg.split(None, 1)
             try:
-                n = int(arg) if arg else 10
+                n = int(parts2[0]) if parts2 else 10
+                col_arg = parts2[1].strip() if len(parts2) > 1 else None
             except ValueError:
                 n = 10
-            show_sample(n)
+                col_arg = parts2[0].strip() if parts2 else None
+            show_sample(n, col_arg)
         elif cmd == "xlsx":
             show_xlsx(arg if arg else None)
+        elif cmd in ("check", "c"):
+            check_xlsx(arg if arg else None)
         elif cmd == "stats":
             print_stats()
         else:
-            print(warn(f"  Unknown command '{cmd}'. Try: orig / new / sample / xlsx / stats / q"))
+            print(warn(f"  Unknown command '{cmd}'. Try help or ? for a list of commands"))
 except Exception as e:
     print(warn(f"\nError: {e}"))
 

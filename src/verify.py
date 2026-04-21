@@ -12,11 +12,10 @@ import os
 import re
 import sys
 import warnings
-import datetime
 import openpyxl
-import openpyxl.descriptors.base as _openpyxl_base
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rules import is_remap_col, is_redact_col, mapping_col
+from rules import is_remap_col, is_redact_col, mapping_col, XLSX_COLUMN_MAP, patch_openpyxl
+patch_openpyxl()
 
 if len(sys.argv) != 2:
     print("Usage: verify.py <site_name>")
@@ -25,41 +24,23 @@ if len(sys.argv) != 2:
 
 SITE = sys.argv[1]
 
-# Paths — read from environment (set via .env loaded by the calling shell script)
-# or fall back to defaults so verify.py can also be run standalone.
-CPT_BASE    = os.environ.get("CPT_BASE",    "REDACTED:/data/sas_queries/<source_user>/compare_q01")
-OUT_BASE    = os.environ.get("OUT_BASE",    "REDACTED:/data/sas_queries/<your_user>/lessid_drnoc")
-LOOKUP_BASE = os.environ.get("LOOKUP_BASE", "REDACTED:/data/sas_queries/<your_user>/lessid_lookup")
+# Paths — read from environment (set by pipeline.py) or fall back to placeholders
+CPT_BASE    = os.environ.get("CPT_BASE",    "")
+OUT_BASE    = os.environ.get("OUT_BASE",    "")
+LOOKUP_BASE = os.environ.get("LOOKUP_BASE", "")
 
-src_drnoc   = os.path.join(CPT_BASE,    SITE, "drnoc")
-out_dir     = os.path.join(OUT_BASE,    SITE)
-mapping_csv = os.path.join(LOOKUP_BASE, SITE, "mapping.csv")
+# Mapping lives at lookup_base/{site_code}/{site_code}_mapping.csv
+_m = re.match(r'^(.+?)_compare.*?_(q\d+)$', SITE, re.IGNORECASE)
+if not _m:
+    print(f"ERROR: Cannot parse site code from: {SITE!r}")
+    sys.exit(1)
+_site_code = _m.group(1).upper()
+
+src_drnoc   = os.path.join(CPT_BASE, SITE, "drnoc")
+out_dir     = os.path.join(OUT_BASE, SITE)
+mapping_csv = os.path.join(LOOKUP_BASE, _site_code, f'{_site_code}_mapping.csv')
 
 MAPPED_PATTERN = re.compile(r'^(PAT|ENC|PRV|FAC|ID)_[A-Z0-9]+_\d{8}$')
-
-XLSX_COLUMN_MAP = {
-    "patient id":      "patid",
-    "encounter id":    "encounterid",
-    "diagnosis id":    "diagnosisid",
-    "lab result id":   "lab_result_cm_id",
-    "med id":          "med_id",
-    "c_patid":         "patid",
-    "c_trialid":       "trialid",
-    "c_partid":        "trialid",
-    "e_partid":        "trialid",
-    "c_siteid":        "trial_siteid",
-    "e_siteid":        "trial_siteid",
-}
-
-# openpyxl compatibility patch
-_orig_convert = _openpyxl_base._convert
-def _patched_convert(expected_type, value):
-    if (expected_type is datetime.datetime
-            and isinstance(value, datetime.date)
-            and not isinstance(value, datetime.datetime)):
-        return datetime.datetime.combine(value, datetime.time.min)
-    return _orig_convert(expected_type, value)
-_openpyxl_base._convert = _patched_convert
 
 # ── Checks ─────────────────────────────────────────────────────────────────
 
