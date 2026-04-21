@@ -16,3 +16,7 @@ run_lessid.sh
 run_lessid_test.sh
 
 plan-podmanSmokeTestReadmeRewrite.prompt.md
+plan-cumulative-mappings.md
+plan-migrate-lookup.md
+sas/check_s2_all.sas
+src/repair_s2.py
