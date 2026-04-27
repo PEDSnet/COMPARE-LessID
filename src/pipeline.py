@@ -12,7 +12,7 @@ Commands
 
 Common flags
 ------------
-  --force / -f            Reprocess even if _cpt_completed / _xlsx_completed marker exists
+  --force / -f            Reprocess even if .cpt_completed / .xlsx_completed marker exists
   --yes / -y              Skip confirmation prompt before running
   --parallel N            Process N sites concurrently (default: max(2, cpu_count-8))
   --config PATH           Path to lessid.toml  (default: config/lessid.toml in repo root)
@@ -136,6 +136,7 @@ def load_config(cfg_path: str | None = None) -> dict:
         'parallel':        _resolve_parallel(raw.get('processing', {}).get('parallel')),
         'sites':           raw.get('processing', {}).get('sites', []),
         'date_shift_days': int(raw.get('processing', {}).get('date_shift_days', 0)),
+        'query_version':   int(raw.get('processing', {}).get('query_version', 1)),
     }
     raw_cols = dict(raw.get('columns', {}))
     if 'known_tables' not in raw_cols:
@@ -173,6 +174,18 @@ def resolve_sites(cfg: dict, site_args: tuple[str, ...]) -> list[str]:
     if cfg['processing']['sites']:
         return list(cfg['processing']['sites'])
     return discover_sites(cpt_base)
+
+
+def _parse_site_query(site_name: str) -> tuple[str, str]:
+    """Split 'C7LC_compare_deq_q01' → ('C7LC', 'q01').  Raises ValueError on bad format."""
+    import re
+    m = re.match(r'^(?P<site>.+?)_compare.*?_(q\d+)$', site_name, re.IGNORECASE)
+    if not m:
+        raise ValueError(
+            f"Cannot parse site/query from folder name: {site_name!r}\n"
+            "  Expected pattern: SITE_compare[...]_qNN  (e.g. C7LC_compare_deq_q01)"
+        )
+    return m.group('site').upper(), m.group(2)
 
 
 # ── Timing helpers ───────────────────────────────────────────────────────────
@@ -264,7 +277,7 @@ def run_site_cpt(site_name: str, cfg: dict, force: bool = False) -> dict:
     mapping_csv  = site_lookup / f'{site_code}_mapping.csv'
     mapping_report = site_lookup / f'{site_code}_mapping_report.txt'
 
-    if (site_out / '_cpt_completed').exists() and mapping_csv.exists() and not force:
+    if (site_out / '.cpt_completed').exists() and mapping_csv.exists() and not force:
         return {'site': site_name, 'status': 'SKIPPED', 'tables': '-', 'mappings': '-',
                 'elapsed': 0.0, 'error': None}
 
@@ -293,9 +306,12 @@ run;
         table_count = len(list(sas7bdat_dir.glob('*.sas7bdat')))
 
         # Step 2: collect IDs
+        site_meta_csv = site_lookup / 'site_meta.csv'
         run_sas(
             sas_bin,
-            f'%let input_lib_path = {sas7bdat_dir}; %let output_csv = {cpt_ids_csv};',
+            (f'%let input_lib_path = {sas7bdat_dir}; '
+             f'%let output_csv = {cpt_ids_csv}; '
+             f'%let output_meta_csv = {site_meta_csv};'),
             sas_script=str(Path(lessid_dir) / 'sas' / 'collect_site_ids.sas'),
             log_path=str(mapped_dir / 'collect_ids.log'),
             lst_path=str(mapped_dir / 'collect_ids.lst'),
@@ -312,6 +328,8 @@ run;
             str(site_drnoc),
             str(mapping_csv),
             str(mapping_report),
+            str(site_meta_csv),
+            str(cfg['processing']['query_version']),
         ], check=True)
 
         # Step 4: apply mapping (lessid.sas) — one file at a time like run.sh
@@ -345,7 +363,10 @@ run;
 ''')
 
         mapping_count = _count_csv_rows(mapping_csv)
-        (site_out / '_cpt_completed').touch()
+        (site_out / '.cpt_completed').write_text(
+            'This file is a lessid pipeline checkpoint and is not part of the study deliverable.\n'
+            'If you received this file from PEDSnet, you are free to delete it.\n'
+        )
 
         # Clean up intermediates
         import shutil
@@ -379,7 +400,7 @@ def run_site_xlsx(site_name: str, cfg: dict, force: bool = False) -> dict:
     site_code, _ = _parse_site_query(site_name)
     mapping_csv = Path(lookup_base) / site_code / f'{site_code}_mapping.csv'
 
-    if (site_out / '_xlsx_completed').exists() and not force:
+    if (site_out / '.xlsx_completed').exists() and not force:
         return {'site': site_name, 'status': 'SKIPPED', 'files': '-', 'mappings': '-',
                 'elapsed': 0.0, 'error': None}
 
@@ -418,7 +439,10 @@ def run_site_xlsx(site_name: str, cfg: dict, force: bool = False) -> dict:
                 _shutil.copy2(src_file, site_out / src_file.name)
 
         mapping_count = _count_csv_rows(mapping_csv)
-        (site_out / '_xlsx_completed').touch()
+        (site_out / '.xlsx_completed').write_text(
+            'This file is a lessid pipeline checkpoint and is not part of the study deliverable.\n'
+            'If you received this file from PEDSnet, you are free to delete it.\n'
+        )
 
         return {
             'site': site_name, 'status': 'OK',
@@ -544,7 +568,7 @@ def plan(ctx, site):
 @click.option('--site', 'sites_opt', multiple=True, metavar='SITE',
               help='Site(s) to process (default: all)')
 @click.option('--force', '-f', is_flag=True,
-              help='Reprocess even if _cpt_completed marker exists')
+              help='Reprocess even if .cpt_completed marker exists')
 @click.option('--yes', '-y', is_flag=True,
               help='Skip confirmation prompt')
 @click.option('--parallel', '-j', 'n_parallel', default=None, type=int, metavar='N',
@@ -622,13 +646,6 @@ def run(ctx, sites_opt, force, yes, n_parallel, cpt_only, xlsx_only):
 
         verify_rows = [[r['site'], r['status']] for r in verify_results]
         _print_summary_table(['Site', 'Status'], verify_rows, 'Verify results')
-
-        # Remove resume-markers for sites that passed verify — they've served their purpose
-        for r in verify_results:
-            if r['status'] == 'OK':
-                site_out = Path(paths['out_base']) / r['site']
-                for marker in ('_cpt_completed', '_xlsx_completed'):
-                    (site_out / marker).unlink(missing_ok=True)
 
     click.echo(f'\nTotal elapsed: {_fmt_elapsed(time.time() - t_total)}')
 
