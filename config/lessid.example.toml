@@ -41,8 +41,12 @@ date_shift_days = 0
 # Example: sites = ["C7LC_compare_deq_q01", "C7CCHMC_compare_deq_q01"]
 sites = []
 
-# If true, reprocess sites even if a _cpt_completed marker file exists.
+# If true, reprocess sites even if a .cpt_completed marker file exists.
 force = false
+
+# Query version integer embedded in the mapping CSV 'query' column.
+# Set to 1 for the first query run, 2 for the second, etc.
+query_version = 1
 
 # Number of sites to process in parallel.
 # Each site runs in its own process; SAS is safe to parallelize per-site
@@ -56,6 +60,15 @@ force = false
 # Columns (lowercased) that end in 'id' but must NOT be remapped.
 # These are values that look like IDs but carry no identifying information
 # (e.g. trial enrollment codes, data mart identifiers).
+
+# TODO: Never remap
+# c_datamartid
+# c_partid
+# c_patid
+# c_siteid
+# c_trialid
+# trial_siteid
+# trialid
 remap_never = [
     "participantid",
     "datamartid",
