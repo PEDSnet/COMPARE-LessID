@@ -6,6 +6,11 @@
 /* Determine date_shift_days, default to 0 if not provided */
 %let date_shift_days = %sysfunc(ifc(%symexist(date_shift_days), &date_shift_days, 0));
 
+/* Derive the source dataset name from input_path basename (case-insensitive).
+   Used below for per-table remap rules (e.g. PCORNET_TRIAL exemption). */
+%let _input_basename = %scan(&input_path, -1, %str(/));
+%let _input_dsname   = %lowcase(%scan(&_input_basename, 1, %str(.)));
+
 /* Read original data */
 data original_data;
     set "&input_path";
@@ -43,6 +48,21 @@ proc sql noprint;
           and lowcase(strip(name)) not in ('participantid', 'datamartid', 'trialid');
 quit;
 %let remap_col_count = &sqlobs;
+
+/* PCORNET_TRIAL exemption (per spec):
+   In the PCORNET_TRIAL table, ONLY patid is de-identified. Other id$ columns
+   (notably trial_siteid) must remain as raw values so the trial enrollment
+   system can still cross-reference them. */
+%if &_input_dsname = pcornet_trial %then %do;
+    %if %sysfunc(indexw(&remap_cols, patid)) > 0 %then %do;
+        %let remap_cols = patid;
+        %let remap_col_count = 1;
+    %end;
+    %else %do;
+        %let remap_cols = ;
+        %let remap_col_count = 0;
+    %end;
+%end;
 
 /* Discover redact columns — values are blanked entirely:
      redact_value — ^raw_ | trial_invite_code | provider_npi | result_text$ | zip9$ */
