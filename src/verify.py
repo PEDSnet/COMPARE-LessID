@@ -13,6 +13,7 @@ import re
 import sys
 import warnings
 import openpyxl
+warnings.filterwarnings("ignore", message="Cannot parse header or footer", category=UserWarning, module="openpyxl")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from rules import is_remap_col, is_redact_col, mapping_col, XLSX_COLUMN_MAP, patch_openpyxl
 patch_openpyxl()
@@ -29,7 +30,7 @@ CPT_BASE    = os.environ.get("CPT_BASE",    "")
 OUT_BASE    = os.environ.get("OUT_BASE",    "")
 LOOKUP_BASE = os.environ.get("LOOKUP_BASE", "")
 
-# Mapping lives at lookup_base/{site_code}/{site_code}_mapping.csv
+# Mapping lives at lookup_base/{site_code}/{site_code}_mapping.csv  (cumulative across queries)
 _m = re.match(r'^(.+?)_compare.*?_(q\d+)$', SITE, re.IGNORECASE)
 if not _m:
     print(f"ERROR: Cannot parse site code from: {SITE!r}")
@@ -261,6 +262,7 @@ if not xlsx_pat_pairs:
     sample_pairs = []
 else:
     cross_errors = 0
+    sample_pairs = []   # defensive: keep defined even if cross_errors > 0
     for mapped_id, xlsx_orig in list(xlsx_pat_pairs.items())[:20]:
         # Confirm mapping.csv agrees
         mapping_orig = reverse_mapping.get(mapped_id)
@@ -368,8 +370,9 @@ libname chk clear;
         tf_path = tf.name
 
     log_path = tf_path.replace('.sas', '.log')
+    sas_bin = '/host_sas' if os.path.isfile('/host_sas') else 'sas'
     result = subprocess.run(
-        ['sas', '-nodms', '-log', log_path, tf_path],
+        [sas_bin, '-nodms', '-log', log_path, tf_path],
         capture_output=True, text=True, timeout=300
     )
     os.unlink(tf_path)
