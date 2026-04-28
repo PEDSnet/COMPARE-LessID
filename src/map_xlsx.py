@@ -8,13 +8,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from rules import is_remap_col, is_redact_col, mapping_col, XLSX_COLUMN_MAP, norm, patch_openpyxl
 patch_openpyxl()
 
-if len(sys.argv) != 4:
-    print("Usage: map_xlsx.py <mapping.csv> <input.xlsx> <output.xlsx>")
+if len(sys.argv) != 5:
+    print("Usage: map_xlsx.py <mapping.csv> <input.xlsx> <output.xlsx> <pre_redacted_str>")
     sys.exit(1)
 
 MAPPING_CSV = sys.argv[1]
 INPUT_PATH = sys.argv[2]
 OUTPUT_PATH = sys.argv[3]
+# Colon-separated pre-redacted placeholder values — leave these as-is
+PRE_REDACTED = {v.strip().lower() for v in sys.argv[4].split(':') if v.strip()}
 
 # load mapping
 mapping = {}
@@ -68,6 +70,8 @@ for ws in wb.worksheets:
             v = norm(row[i].value)
             if not v:
                 continue
+            if v.lower() in PRE_REDACTED:
+                continue  # leave placeholder as-is, don't count as missing
             mapped = mapping.get((col, v))
             if mapped is None:
                 missing += 1

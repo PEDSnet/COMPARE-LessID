@@ -76,6 +76,11 @@ remap_extra = []
 # Takes precedence over the id$ pattern match.
 remap_exclude = []
 
+# Values that are pre-redacted placeholders in source data — never assign a
+# surrogate ID to these. Case-insensitive. Colon-separated internally.
+# Covers common EDC masking conventions (e.g. XXX, REDACTED).
+pre_redacted_values = ["xxx", "redacted", "n/a", "na", "unknown", "unk", "-", "--", "masked"]
+
 # PCORNet CDM tables to inspect during `pipeline audit`.
 # Defaults to the full CDM table list when omitted. Override here to restrict
 # the scan to a subset (e.g. if your study only needs to de-identify certain tables).

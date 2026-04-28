@@ -25,8 +25,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from rules import is_remap_col, mapping_col, prefix_for, XLSX_COLUMN_MAP, norm, patch_openpyxl
 patch_openpyxl()
 
-if len(sys.argv) != 8:
-    print("Usage: build_site_mapping.py <site_name> <cpt_ids_csv> <xlsx_dir> <mapping_csv> <report_txt> <site_meta_csv> <query_version>")
+if len(sys.argv) != 9:
+    print("Usage: build_site_mapping.py <site_name> <cpt_ids_csv> <xlsx_dir> <mapping_csv> <report_txt> <site_meta_csv> <query_version> <pre_redacted_str>")
     sys.exit(1)
 
 SITE_NAME     = sys.argv[1]
@@ -36,6 +36,10 @@ MAPPING_CSV   = sys.argv[4]
 REPORT_TXT    = sys.argv[5]
 SITE_META_CSV = sys.argv[6]
 QUERY_VERSION = sys.argv[7]  # integer as string, e.g. "1"
+# Colon-separated list of pre-redacted placeholder values (case-insensitive)
+# that should never receive a surrogate ID.  e.g. "xxx:redacted:n/a"
+_pre_redacted_raw = sys.argv[8]
+PRE_REDACTED = {v.strip().lower() for v in _pre_redacted_raw.split(':') if v.strip()}
 
 # ── Determine site_code and query ─────────────────────────────────────────────
 # site_code: read from site_meta.csv (DATAMARTID from HARVEST) — authoritative
@@ -97,6 +101,8 @@ if os.path.exists(CPT_IDS_CSV):
             if not is_remap_col(col):
                 continue
             key = (mapping_col(col), val)
+            if val.lower() in PRE_REDACTED:
+                continue
             if key not in existing and key not in new_pairs:
                 new_pairs.add(key)
                 cpt_pairs += 1
@@ -104,6 +110,8 @@ if os.path.exists(CPT_IDS_CSV):
 for name in sorted(os.listdir(XLSX_DIR)):
     if not name.lower().endswith(".xlsx"):
         continue
+    if 'edc_discrepancies' in name.lower():
+        continue  # verbatim copy — not remapped, skip to avoid placeholder values entering mapping
     path = os.path.join(XLSX_DIR, name)
     if not os.path.isfile(path):
         continue
@@ -132,6 +140,8 @@ for name in sorted(os.listdir(XLSX_DIR)):
             for i, col in id_idx:
                 val = norm(row[i].value)
                 if not val:
+                    continue
+                if val.lower() in PRE_REDACTED:
                     continue
                 key = (col, val)
                 if key not in existing and key not in new_pairs:
