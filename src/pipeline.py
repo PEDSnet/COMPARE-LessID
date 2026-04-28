@@ -379,6 +379,25 @@ run;
         _log_step(f"  [{site_name}] step 3/5: build mapping done  "
                   f"({_fmt_elapsed(time.time()-_step_t)}, {_ts(t0)})", q, site_name)
 
+        # Warn if zero new IDs were added — likely forgot to increment query_version
+        if mapping_report.exists():
+            _rpt = {}
+            with open(mapping_report, encoding='utf-8') as _fh:
+                for _line in _fh:
+                    if ':' in _line:
+                        _k, _, _v = _line.partition(':')
+                        _rpt[_k.strip()] = _v.strip()
+            _new_this = int(_rpt.get('new_this_query', -1))
+            _existing = int(_rpt.get('existing_mappings', 0))
+            if _new_this == 0 and _existing > 0:
+                _log_step(
+                    f"  [{site_name}] WARNING: 0 new IDs added to mapping "
+                    f"({_existing} existing rows). "
+                    f"If this is unexpected, check query_version in config "
+                    f"(currently: {cfg['processing']['query_version']}).",
+                    q, site_name,
+                )
+
         # Step 4: apply mapping (lessid.sas) — one file at a time
         tables_ordered = [p.stem for p in sorted(sas7bdat_dir.glob('*.sas7bdat'))]
         _log_step(
