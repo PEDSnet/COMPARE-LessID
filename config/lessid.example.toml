@@ -109,3 +109,18 @@ pre_redacted_values = ["xxx", "redacted", "n/a", "na", "unknown", "unk", "-", "-
 #     "vx_providerid",
 # ]
 [columns.aliases]
+
+# ── Backup ──────────────────────────────────────────────────────────────────
+# After a successful run+verify, copy per-site lookup CSVs and de-identified
+# outputs to a timestamped snapshot directory under backup_base.
+# Snapshot path: {backup_base}/{query}_{YYYYMMDD_HHMMSS}/
+#   lookups/<site_code>/   — mapping.csv + report.txt
+#   outputs/<site>/        — de-identified XLSX/CPT outputs
+#   lessid_run_<ts>.log    — run log
+#
+# Only verified-OK sites are included.  Errors per site are logged but
+# non-fatal — a backup failure will not invalidate a completed pipeline run.
+# Set enabled = false (or omit this section) to skip backup entirely.
+[backup]
+enabled     = false
+backup_base = "/mnt/backups"

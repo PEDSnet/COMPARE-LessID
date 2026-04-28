@@ -19,7 +19,9 @@ Common flags
 """
 
 import csv
+import datetime
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -141,7 +143,12 @@ def load_config(cfg_path: str | None = None) -> dict:
     raw_cols = dict(raw.get('columns', {}))
     if 'known_tables' not in raw_cols:
         raw_cols['known_tables'] = list(KNOWN_TABLES)
-    cfg = {'paths': paths, 'processing': processing, 'columns': raw_cols}
+    raw_backup = raw.get('backup', {})
+    backup = {
+        'enabled':     bool(raw_backup.get('enabled', False)),
+        'backup_base': str(raw_backup.get('backup_base', '')).strip(),
+    }
+    cfg = {'paths': paths, 'processing': processing, 'columns': raw_cols, 'backup': backup}
     return cfg
 
 
@@ -611,6 +618,110 @@ def _print_summary_table(headers: list[str], rows: list[list], title: str) -> No
     click.echo(bar)
 
 
+# ── Backup ───────────────────────────────────────────────────────────────────
+
+def backup_run(sites: list, cfg: dict, run_ts: str) -> None:
+    """
+    Copy lookup CSVs and per-site output dirs to backup_base after a successful run.
+    Errors are logged per-site and non-fatal — a backup failure must not invalidate
+    an already-completed pipeline run.
+    Creates: {backup_base}/{query}_{run_ts}/lookups/<site_code>/  and outputs/<site>/
+    """
+    backup_base = Path(cfg['backup']['backup_base'])
+    if not cfg['backup']['backup_base']:
+        click.echo('  [backup] backup_base is empty — skipping backup.', err=True)
+        return
+    if not backup_base.exists():
+        click.echo(
+            f'  [backup] backup_base does not exist: {backup_base}\n'
+            '           Is the Isilon mount active?  Skipping backup.',
+            err=True,
+        )
+        return
+
+    paths = cfg['paths']
+    lookup_base = Path(paths['lookup_base'])
+    out_base    = Path(paths['out_base'])
+
+    # Query version comes from config — authoritative, same source as mapping rows.
+    query = f'q{int(cfg["processing"]["query_version"]):02d}'
+
+    snap_name = f'{query}_{run_ts}'
+    snap_dir  = backup_base / snap_name
+    try:
+        snap_dir.mkdir(parents=False, exist_ok=False)
+    except FileExistsError:
+        click.echo(
+            f'  [backup] Snapshot dir already exists: {snap_dir}\n'
+            '           Possible timestamp collision — skipping backup to avoid overwrite.',
+            err=True,
+        )
+        return
+
+    lookup_dst = snap_dir / 'lookups'
+    output_dst = snap_dir / 'outputs'
+    lookup_dst.mkdir()
+    output_dst.mkdir()
+
+    click.echo(f'\n─── Backup ─────────────────────────────────────')
+    click.echo(f'  Destination: {snap_dir}')
+
+    ok_count = 0
+    for site in sites:
+        # Resolve site_code from site_meta.csv (DATAMARTID) — authoritative.
+        # Fall back to folder-name parse only if site_meta.csv is absent.
+        parsed = _parse_site_query(site)
+        folder_code = parsed[0] if parsed else site
+        site_meta_csv = lookup_base / folder_code / 'site_meta.csv'
+        site_code = folder_code
+        if site_meta_csv.exists():
+            try:
+                with open(site_meta_csv, newline='', encoding='utf-8') as _fh:
+                    _row = next(csv.DictReader(_fh), None)
+                    if _row and (_row.get('datamartid') or '').strip():
+                        site_code = _row['datamartid'].strip().upper()
+            except Exception:
+                pass
+        try:
+            site_lookup_src = lookup_base / folder_code
+            copied_lookup = 0
+            if site_lookup_src.is_dir():
+                site_lookup_dst = lookup_dst / site_code
+                site_lookup_dst.mkdir(exist_ok=True)
+                for f in site_lookup_src.iterdir():
+                    if f.is_file() and f.suffix in ('.csv', '.txt'):
+                        shutil.copy2(f, site_lookup_dst / f.name)
+                        copied_lookup += 1
+            else:
+                click.echo(f'  [backup] WARNING: no lookup dir for {site_code}', err=True)
+
+            site_out_src = out_base / site
+            copied_out = 0
+            if site_out_src.is_dir():
+                site_out_dst = output_dst / site
+                site_out_dst.mkdir(exist_ok=True)
+                for f in site_out_src.iterdir():
+                    if f.is_file():
+                        shutil.copy2(f, site_out_dst / f.name)
+                        copied_out += 1
+            else:
+                click.echo(f'  [backup] WARNING: no output dir for {site}', err=True)
+
+            click.echo(f'  {site}: lookup={copied_lookup} file(s), output={copied_out} file(s)')
+            ok_count += 1
+        except Exception as exc:
+            click.echo(f'  [backup] ERROR for {site}: {exc}', err=True)
+
+    log_src_dir = out_base / 'logs'
+    if log_src_dir.is_dir():
+        for lf in sorted(log_src_dir.glob(f'*{run_ts}*.log')):
+            shutil.copy2(lf, snap_dir / lf.name)
+            click.echo(f'  run log: {lf.name}')
+            break
+
+    click.echo(f'  Backup complete: {ok_count}/{len(sites)} site(s) → {snap_dir}')
+
+
 def _parallel_run(fn, sites, cfg, force, n_workers):
     """Run fn(site, cfg, force) in parallel with ProcessPoolExecutor."""
     results = []
@@ -827,6 +938,7 @@ def run(ctx, sites_opt, force, yes, n_parallel, cpt_only, xlsx_only):
     if not yes:
         click.confirm('\nProceed?', abort=True)
 
+    run_ts  = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     t_total = time.time()
 
     # ── CPT phase ──
@@ -877,6 +989,11 @@ def run(ctx, sites_opt, force, yes, n_parallel, cpt_only, xlsx_only):
 
         verify_rows = [[r['site'], r['status']] for r in verify_results]
         _print_summary_table(['Site', 'Status'], verify_rows, 'Verify results')
+
+        # ── Backup phase ──
+        verified_ok = [r['site'] for r in verify_results if r['status'] == 'OK']
+        if cfg['backup']['enabled'] and verified_ok:
+            backup_run(verified_ok, cfg, run_ts)
 
     click.echo(f'\nTotal elapsed: {_fmt_elapsed(time.time() - t_total)}')
 
