@@ -589,6 +589,7 @@ def run(ctx, sites_opt, force, yes, n_parallel, cpt_only, xlsx_only):
 
     effective_force = force or cfg['processing']['force']
     n_workers = _resolve_parallel(n_parallel) if n_parallel is not None else cfg['processing']['parallel']
+    n_workers = min(n_workers, len(sites))
 
     click.echo(f'\nlessid pipeline')
     click.echo('=' * 50)
