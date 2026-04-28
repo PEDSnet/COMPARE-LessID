@@ -199,13 +199,28 @@ def _fmt_elapsed(secs: float) -> str:
     return f'{m}m{s:02d}s'
 
 
+def _ts(t0: float) -> str:
+    """Elapsed since t0 as e.g. t+1m12s."""
+    return f"t+{_fmt_elapsed(time.time() - t0)}"
+
+
+def _log_step(msg: str, q=None, site: str = '') -> None:
+    """Emit a step message: push to live queue if available, else print directly."""
+    if q is not None:
+        try:
+            q.put_nowait({'event': 'step', 'site': site, 'msg': msg})
+        except Exception:
+            pass
+    else:
+        print(msg, flush=True)
+
+
 # ── SAS runner ───────────────────────────────────────────────────────────────
 
 def run_sas(sas_bin: str, initstmt: str, sas_script: str | None = None,
             log_path: str | None = None, lst_path: str | None = None,
             stdin_code: str | None = None) -> None:
     """Run SAS. Raises subprocess.CalledProcessError on non-zero exit."""
-    cmd = [sas_bin, '-nodms']
     if sas_script:
         cmd = [sas_bin]
         if log_path:
@@ -213,11 +228,11 @@ def run_sas(sas_bin: str, initstmt: str, sas_script: str | None = None,
         if lst_path:
             cmd += ['-print', lst_path]
         cmd += ['-initstmt', initstmt, sas_script]
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, capture_output=True)
     else:
         # Inline SAS via stdin
         cmd = [sas_bin, '-nodms', '-stdio']
-        subprocess.run(cmd, input=stdin_code.encode(), check=True)
+        subprocess.run(cmd, input=stdin_code.encode(), check=True, capture_output=True)
 
 
 # ── Plan display ─────────────────────────────────────────────────────────────
@@ -250,7 +265,7 @@ def _show_plan(site_name: str, cfg: dict, cpt_path: str | None = None) -> None:
 
 # ── Per-site CPT pipeline ────────────────────────────────────────────────────
 
-def run_site_cpt(site_name: str, cfg: dict, force: bool = False) -> dict:
+def run_site_cpt(site_name: str, cfg: dict, force: bool = False, q=None) -> dict:
     """
     Run the full CPT pipeline for one site:
       1. proc cimport
@@ -278,13 +293,19 @@ def run_site_cpt(site_name: str, cfg: dict, force: bool = False) -> dict:
     mapping_report = site_lookup / f'{site_code}_mapping_report.txt'
 
     if (site_out / '.cpt_completed').exists() and mapping_csv.exists() and not force:
-        return {'site': site_name, 'status': 'SKIPPED', 'tables': '-', 'mappings': '-',
-                'elapsed': 0.0, 'error': None}
+        result = {'site': site_name, 'status': 'SKIPPED', 'tables': '-', 'mappings': '-',
+                  'elapsed': 0.0, 'error': None}
+        if q is not None:
+            q.put_nowait({'event': 'done', 'site': site_name, 'result': result})
+        return result
 
     cpt_files = sorted(site_drnoc.glob('*.cpt'))
     if not cpt_files:
-        return {'site': site_name, 'status': 'NO CPT', 'tables': '-', 'mappings': '-',
-                'elapsed': time.time() - t0, 'error': 'No CPT found'}
+        result = {'site': site_name, 'status': 'NO CPT', 'tables': '-', 'mappings': '-',
+                  'elapsed': time.time() - t0, 'error': 'No CPT found'}
+        if q is not None:
+            q.put_nowait({'event': 'done', 'site': site_name, 'result': result})
+        return result
 
     cpt_file  = cpt_files[0]
     cpt_stem  = cpt_file.stem
@@ -296,17 +317,30 @@ def run_site_cpt(site_name: str, cfg: dict, force: bool = False) -> dict:
     for d in (sas7bdat_dir, mapped_dir, site_out, site_lookup):
         d.mkdir(parents=True, exist_ok=True)
 
+    if q is not None:
+        q.put_nowait({'event': 'start', 'site': site_name, 't0': t0})
+
+    pre_redacted_str = ':'.join(cfg['columns'].get(
+        'pre_redacted_values', ['xxx', 'redacted', 'n/a', 'na', 'unknown', 'unk', '-', '--', 'masked']
+    ))
+
     try:
         # Step 1: proc cimport
+        _step_t = time.time()
+        _log_step(f"  [{site_name}] step 1/5: cimport {cpt_file.name}  ({_ts(t0)})", q, site_name)
         run_sas(sas_bin, '', stdin_code=f'''
 libname outlib "{sas7bdat_dir}";
 proc cimport infile="{cpt_file}" library=outlib;
 run;
 ''')
         table_count = len(list(sas7bdat_dir.glob('*.sas7bdat')))
+        _log_step(f"  [{site_name}] step 1/5: cimport done \u2014 {table_count} tables  "
+                  f"({_fmt_elapsed(time.time()-_step_t)}, {_ts(t0)})", q, site_name)
 
         # Step 2: collect IDs
         site_meta_csv = site_lookup / 'site_meta.csv'
+        _step_t = time.time()
+        _log_step(f"  [{site_name}] step 2/5: collect IDs  ({_ts(t0)})", q, site_name)
         run_sas(
             sas_bin,
             (f'%let input_lib_path = {sas7bdat_dir}; '
@@ -316,10 +350,13 @@ run;
             log_path=str(mapped_dir / 'collect_ids.log'),
             lst_path=str(mapped_dir / 'collect_ids.lst'),
         )
+        _log_step(f"  [{site_name}] step 2/5: collect IDs done  "
+                  f"({_fmt_elapsed(time.time()-_step_t)}, {_ts(t0)})", q, site_name)
 
         # Step 3: build mapping
-        # Discover XLSX files in site_drnoc
         py_dir = _find_py_dir(lessid_dir)
+        _step_t = time.time()
+        _log_step(f"  [{site_name}] step 3/5: build mapping  ({_ts(t0)})", q, site_name)
         subprocess.run([
             sys.executable,
             str(py_dir / 'build_site_mapping.py'),
@@ -330,9 +367,19 @@ run;
             str(mapping_report),
             str(site_meta_csv),
             str(cfg['processing']['query_version']),
-        ], check=True)
+            pre_redacted_str,
+        ], check=True, capture_output=True)
+        _log_step(f"  [{site_name}] step 3/5: build mapping done  "
+                  f"({_fmt_elapsed(time.time()-_step_t)}, {_ts(t0)})", q, site_name)
 
-        # Step 4: apply mapping (lessid.sas) — one file at a time like run.sh
+        # Step 4: apply mapping (lessid.sas) — one file at a time
+        tables_ordered = [p.stem for p in sorted(sas7bdat_dir.glob('*.sas7bdat'))]
+        _log_step(
+            f"  [{site_name}] step 4/5: apply mapping \u2014 {len(tables_ordered)} table(s): "
+            f"{', '.join(tables_ordered)}  ({_ts(t0)})",
+            q, site_name,
+        )
+        _step_t = time.time()
         for sas7bdat in sorted(sas7bdat_dir.glob('*.sas7bdat')):
             stem = sas7bdat.stem
             out_path = mapped_dir / sas7bdat.name
@@ -352,15 +399,21 @@ run;
                 log_path=str(log_path),
                 lst_path=str(lst_path),
             )
+        _log_step(f"  [{site_name}] step 4/5: apply mapping done  "
+                  f"({_fmt_elapsed(time.time()-_step_t)}, {_ts(t0)})", q, site_name)
 
         # Step 5: proc cport
         out_cpt = site_out / f'{cpt_stem}.cpt'
+        _step_t = time.time()
+        _log_step(f"  [{site_name}] step 5/5: cport \u2192 {out_cpt.name}  ({_ts(t0)})", q, site_name)
         run_sas(sas_bin, '', stdin_code=f'''
 libname inlib "{mapped_dir}";
 filename tranfile "{out_cpt}";
 proc cport library=inlib file=tranfile memtype=data;
 run;
 ''')
+        _log_step(f"  [{site_name}] step 5/5: cport done  "
+                  f"({_fmt_elapsed(time.time()-_step_t)}, {_ts(t0)})", q, site_name)
 
         mapping_count = _count_csv_rows(mapping_csv)
         (site_out / '.cpt_completed').write_text(
@@ -372,21 +425,32 @@ run;
         import shutil
         shutil.rmtree(Path(work_base) / site_name, ignore_errors=True)
 
-        return {
+        result = {
             'site': site_name, 'status': 'OK',
             'tables': table_count, 'mappings': mapping_count,
             'elapsed': time.time() - t0, 'error': None,
         }
+        _log_step(
+            f"  [{site_name}] CPT DONE \u2014 {table_count} tables, {mapping_count} mappings  "
+            f"(total {_fmt_elapsed(time.time()-t0)})",
+            q, site_name,
+        )
+        if q is not None:
+            q.put_nowait({'event': 'done', 'site': site_name, 'result': result})
+        return result
 
     except Exception as exc:
-        return {
+        result = {
             'site': site_name, 'status': 'FAILED',
             'tables': '-', 'mappings': '-',
             'elapsed': time.time() - t0, 'error': str(exc),
         }
+        if q is not None:
+            q.put_nowait({'event': 'done', 'site': site_name, 'result': result})
+        return result
 
 
-def run_site_xlsx(site_name: str, cfg: dict, force: bool = False) -> dict:
+def run_site_xlsx(site_name: str, cfg: dict, force: bool = False, q=None) -> dict:
     """Run the XLSX de-identification pass for one site."""
     t0 = time.time()
     paths = cfg['paths']
@@ -401,22 +465,45 @@ def run_site_xlsx(site_name: str, cfg: dict, force: bool = False) -> dict:
     mapping_csv = Path(lookup_base) / site_code / f'{site_code}_mapping.csv'
 
     if (site_out / '.xlsx_completed').exists() and not force:
-        return {'site': site_name, 'status': 'SKIPPED', 'files': '-', 'mappings': '-',
-                'elapsed': 0.0, 'error': None}
+        result = {'site': site_name, 'status': 'SKIPPED', 'files': '-', 'mappings': '-',
+                  'elapsed': 0.0, 'error': None}
+        if q is not None:
+            q.put_nowait({'event': 'done', 'site': site_name, 'result': result})
+        return result
 
     if not mapping_csv.exists():
-        return {'site': site_name, 'status': 'NO MAPPING', 'files': '-', 'mappings': '-',
-                'elapsed': time.time() - t0, 'error': 'No mapping.csv'}
+        result = {'site': site_name, 'status': 'NO MAPPING', 'files': '-', 'mappings': '-',
+                  'elapsed': time.time() - t0, 'error': 'No mapping.csv'}
+        if q is not None:
+            q.put_nowait({'event': 'done', 'site': site_name, 'result': result})
+        return result
 
     xlsx_files = sorted(site_drnoc.glob('*.xlsx'))
     if not xlsx_files:
-        return {'site': site_name, 'status': 'NO XLSX', 'files': 0, 'mappings': '-',
-                'elapsed': time.time() - t0, 'error': None}
+        result = {'site': site_name, 'status': 'NO XLSX', 'files': 0, 'mappings': '-',
+                  'elapsed': time.time() - t0, 'error': None}
+        if q is not None:
+            q.put_nowait({'event': 'done', 'site': site_name, 'result': result})
+        return result
 
     site_out.mkdir(parents=True, exist_ok=True)
     py_dir = _find_py_dir(lessid_dir)
 
+    if q is not None:
+        q.put_nowait({'event': 'start', 'site': site_name, 't0': t0})
+
+    pre_redacted_str = ':'.join(cfg['columns'].get(
+        'pre_redacted_values', ['xxx', 'redacted', 'n/a', 'na', 'unknown', 'unk', '-', '--', 'masked']
+    ))
+    remap_count = sum(1 for f in xlsx_files if 'edc_discrepancies' not in f.name.lower())
+
     try:
+        _step_t = time.time()
+        _log_step(
+            f"  [{site_name}] XLSX: remapping {remap_count} file(s) "
+            f"({len(xlsx_files) - remap_count} verbatim copy)  ({_ts(t0)})",
+            q, site_name,
+        )
         for xlsx_file in xlsx_files:
             out_xlsx = site_out / xlsx_file.name
             # EDC discrepancy files contain raw EDC data and must not be de-identified
@@ -430,7 +517,10 @@ def run_site_xlsx(site_name: str, cfg: dict, force: bool = False) -> dict:
                 str(mapping_csv),
                 str(xlsx_file),
                 str(out_xlsx),
-            ], check=True)
+                pre_redacted_str,
+            ], check=True, capture_output=True)
+        _log_step(f"  [{site_name}] XLSX done  "
+                  f"({_fmt_elapsed(time.time()-_step_t)}, {_ts(t0)})", q, site_name)
 
         # Copy logs and PDFs from source drnoc folder alongside the XLSX outputs
         import shutil as _shutil
@@ -444,17 +534,24 @@ def run_site_xlsx(site_name: str, cfg: dict, force: bool = False) -> dict:
             'If you received this file from PEDSnet, you are free to delete it.\n'
         )
 
-        return {
+        result = {
             'site': site_name, 'status': 'OK',
             'files': len(xlsx_files), 'mappings': mapping_count,
             'elapsed': time.time() - t0, 'error': None,
         }
+        if q is not None:
+            q.put_nowait({'event': 'done', 'site': site_name, 'result': result})
+        return result
+
     except Exception as exc:
-        return {
+        result = {
             'site': site_name, 'status': 'FAILED',
             'files': '-', 'mappings': '-',
             'elapsed': time.time() - t0, 'error': str(exc),
         }
+        if q is not None:
+            q.put_nowait({'event': 'done', 'site': site_name, 'result': result})
+        return result
 
 
 def run_site_verify(site_name: str, cfg: dict) -> dict:
@@ -526,6 +623,133 @@ def _parallel_run(fn, sites, cfg, force, n_workers):
         futures = {ex.submit(fn, s, cfg, force): s for s in sites}
         for fut in as_completed(futures):
             results.append(fut.result())
+    return results
+
+
+def _run_phase_live(fn, sites: list, cfg: dict, force: bool, n_workers: int,
+                    phase_title: str, extra_result_keys: list) -> list:
+    """
+    Run fn(site, cfg, force, q) in parallel.
+
+    Displays a rich live table on /dev/tty (bypassing tee) when available.
+    Falls back to plain per-step print() output if /dev/tty or rich is unavailable.
+    After the live context exits, prints a plain-text summary to stdout for the log.
+    """
+    if n_workers <= 1:
+        results = []
+        for s in sites:
+            results.append(fn(s, cfg, force))
+        return results
+
+    # Try to open /dev/tty for the live display (bypasses run_lessid.sh tee)
+    live_console = None
+    _tty_file = None
+    try:
+        from rich.console import Console
+        _tty_file = open('/dev/tty', 'w')
+        live_console = Console(file=_tty_file, force_terminal=True)
+    except (OSError, ImportError):
+        pass
+
+    import multiprocessing as _mp
+    mgr = _mp.Manager()
+    q = mgr.Queue()
+
+    site_status: dict = {s: 'queued' for s in sites}
+    site_step:   dict = {s: '' for s in sites}
+    site_t0:     dict = {}
+    site_result: dict = {}
+
+    def _make_rich_table():
+        from rich.table import Table
+        t = Table(title=phase_title, show_header=True, expand=True)
+        t.add_column('Site', no_wrap=True)
+        t.add_column('Status', width=12)
+        t.add_column('Step', ratio=2)
+        for k in extra_result_keys:
+            t.add_column(k.title(), justify='right', width=9)
+        t.add_column('Time', justify='right', width=9)
+        for s in sites:
+            st = site_status[s]
+            step = site_step[s]
+            extras = [str(site_result.get(s, {}).get(k, '-')) for k in extra_result_keys]
+            if st == 'running':
+                elapsed_str = _fmt_elapsed(time.time() - site_t0[s])
+                t.add_row(s, '[yellow]running\u2026[/]', step, *extras, elapsed_str)
+            elif st in ('OK', 'SKIPPED'):
+                elapsed_str = _fmt_elapsed(site_result[s]['elapsed'])
+                t.add_row(s, '[green]\u2713 ' + st + '[/]', '', *extras, elapsed_str)
+            elif st == 'queued':
+                t.add_row(s, '[dim]queued[/]', '', *extras, '-')
+            else:
+                elapsed_str = _fmt_elapsed(site_result.get(s, {}).get('elapsed', 0))
+                t.add_row(s, '[red]\u2717 ' + st + '[/]', '', *extras, elapsed_str)
+        return t
+
+    def _drain_queue():
+        while True:
+            try:
+                ev = q.get_nowait()
+            except Exception:
+                break
+            s = ev.get('site', '')
+            evt = ev.get('event', '')
+            if evt == 'start':
+                site_status[s] = 'running'
+                site_t0[s] = ev.get('t0', time.time())
+            elif evt == 'step':
+                if s:
+                    site_step[s] = ev.get('msg', '').strip()
+                if live_console is None:
+                    print(ev.get('msg', ''), flush=True)
+            elif evt == 'done':
+                r = ev.get('result', {})
+                site_result[s] = r
+                site_status[s] = r.get('status', 'FAILED')
+                site_step[s] = ''
+
+    results = []
+    try:
+        with ProcessPoolExecutor(max_workers=n_workers) as ex:
+            futures = {ex.submit(fn, s, cfg, force, q): s for s in sites}
+            pending = set(futures)
+
+            if live_console is not None:
+                from rich.live import Live
+                with Live(_make_rich_table(), console=live_console,
+                          refresh_per_second=4) as live:
+                    while pending:
+                        _drain_queue()
+                        live.update(_make_rich_table())
+                        done_futs = {f for f in pending if f.done()}
+                        for f in done_futs:
+                            results.append(f.result())
+                        pending -= done_futs
+                        if pending:
+                            time.sleep(0.15)
+                    _drain_queue()
+                    live.update(_make_rich_table())
+            else:
+                for fut in as_completed(futures):
+                    _drain_queue()
+                    results.append(fut.result())
+                _drain_queue()
+
+        # Print plain-text summary to stdout so it ends up in the log file
+        if live_console is not None:
+            from rich.console import Console as _PlainConsole
+            from rich.table import Table as _PlainTable
+            plain = _PlainConsole(no_color=True, highlight=False)
+            plain.print(_make_rich_table())
+
+    finally:
+        mgr.shutdown()
+        if _tty_file:
+            try:
+                _tty_file.close()
+            except Exception:
+                pass
+
     return results
 
 
@@ -608,7 +832,10 @@ def run(ctx, sites_opt, force, yes, n_parallel, cpt_only, xlsx_only):
     # ── CPT phase ──
     if not xlsx_only:
         click.echo('\n─── Phase 1: CPT ───────────────────────────────')
-        cpt_results = _parallel_run(run_site_cpt, sites, cfg, effective_force, n_workers)
+        cpt_results = _run_phase_live(
+            run_site_cpt, sites, cfg, effective_force, n_workers,
+            'Phase 1: CPT', ['tables', 'mappings'],
+        )
         _print_summary_table(
             ['Site', 'Tables', 'Mappings', 'Time', 'Status'],
             [[r['site'], r['tables'], r['mappings'], _fmt_elapsed(r['elapsed']), r['status']]
@@ -629,7 +856,10 @@ def run(ctx, sites_opt, force, yes, n_parallel, cpt_only, xlsx_only):
         xlsx_sites = sites if xlsx_only else [
             r['site'] for r in cpt_results if r['status'] in ('OK', 'SKIPPED')
         ]
-        xlsx_results = _parallel_run(run_site_xlsx, xlsx_sites, cfg, effective_force, n_workers)
+        xlsx_results = _run_phase_live(
+            run_site_xlsx, xlsx_sites, cfg, effective_force, n_workers,
+            'Phase 2: XLSX', ['files', 'mappings'],
+        )
         _print_summary_table(
             ['Site', 'Files', 'Mappings', 'Time', 'Status'],
             [[r['site'], r['files'], r['mappings'], _fmt_elapsed(r['elapsed']), r['status']]
