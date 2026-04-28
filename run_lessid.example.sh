@@ -31,8 +31,13 @@ fi
 
 # Auto-capture log for run/verify — written to out_base/logs/
 if [[ "${1:-}" == "run" || "${1:-}" == "verify" ]]; then
-    _OUT_BASE=$("${VENV}/bin/python3" -c \
-        "import tomllib; print(tomllib.load(open('${CONFIG}','rb'))['paths']['out_base'])")
+    _OUT_BASE=$("${VENV}/bin/python3" -c "
+try:
+    import tomllib
+except ImportError:
+    import tomli as tomllib
+print(tomllib.load(open('${CONFIG}','rb'))['paths']['out_base'])
+")
     _logdir="${_OUT_BASE}/logs"
     mkdir -p "${_logdir}"
     _logfile="${_logdir}/lessid_${1}_$(date +%Y%m%d_%H%M%S).log"

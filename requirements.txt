@@ -1,3 +1,11 @@
+# Parsing excel files
 openpyxl
+
+# Lightweight pipeline orchestration
 click
 
+# Install tomli configuration if using Python 3.9
+tomli; python_version < "3.11"
+
+# Live parallel progress display
+rich
