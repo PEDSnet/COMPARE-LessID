@@ -6,10 +6,22 @@ A Python + SAS pipeline for de-identifying CDM (Common Data Model) datasets for 
 
 ## Overview
 
-```
-CPT (SAS transport)   ──┐
-                        ├─► collect IDs ──► build mapping ──► apply mapping ──► de-identified CPT
-XLSX reports          ──┘                                  └──► de-identified XLSX
+```mermaid
+flowchart LR
+    CPT[CPT\nSAS transport]
+    XLSX[XLSX reports]
+    CI[collect IDs]
+    BM[build mapping]
+    AM[apply mapping]
+    OUT_CPT[de-identified CPT]
+    OUT_XLSX[de-identified XLSX]
+
+    CPT --> CI
+    XLSX --> CI
+    CI --> BM
+    BM --> AM
+    AM --> OUT_CPT
+    BM --> OUT_XLSX
 ```
 
 Each site gets its own `mapping.csv` so surrogate IDs are stable across re-runs and never collide across sites.
@@ -21,7 +33,7 @@ Each site gets its own `mapping.csv` so surrogate IDs are stable across re-runs 
 | Requirement | Notes |
 |---|---|
 | **SAS 9.4** | Must be installed and licensed on the host machine. The pipeline calls `sas` via subprocess. |
-| **Python 3.11+** | Standard system Python; a venv is created automatically on first run. |
+| **Python 3.9+** | A venv is created automatically on first run. `tomllib` is stdlib in 3.11+; the `tomli` backport is used automatically on 3.9/3.10. |
 
 ---
 
@@ -56,7 +68,7 @@ Copy the run wrapper (gitignored):
 cp run_lessid.example.sh run_lessid.sh
 ```
 
-On the first run the wrapper creates `.venv/` and installs `requirements.txt` automatically. No manual venv setup needed.
+On first run, the wrapper auto-creates `.venv/` and installs `requirements.txt`. **Ensure you have already created the venv with `python3.11` as shown above before the first run.**
 
 ## Run
 
@@ -106,7 +118,7 @@ lessid pipeline
 | `parallel` | `max(2, cpu_count-8)` | Omit to use the auto-default; override with an integer or `"max"` |
 | `date_shift_days` | `0` | Set to a positive integer to enable per-patient date perturbation |
 | `sites` | `[]` | Leave empty to auto-discover all sites under `cpt_base` |
-| `force` | `false` | Reprocess sites that already have a `_cpt_completed` marker |
+| `force` | `false` | Reprocess sites that already have a `.cpt_completed` marker |
 
 ---
 
@@ -135,21 +147,9 @@ lessid_drnoc/
     └── .xlsx_completed                ← marker: XLSX phase done (persists after verify)
 
 lessid_lookup/                         ← KEEP RESTRICTED (contains raw IDs)
-└── C7LC_compare_deq_q01/
-    ├── mapping.csv                    ← (column, original_value, new_id)
-    └── mapping_report.txt
+└── C7LC/
+    ├── C7LC_mapping.csv               ← (column, original_value, new_id)
+    ├── C7LC_mapping_report.txt
+    └── site_meta.csv                  ← DATAMARTID read from HARVEST
 ```
 
----
-
-## Legacy shell scripts
-
-The original shell scripts are retained for reference:
-
-| Script | Replaced by |
-|---|---|
-| `run_all_sites.sh` | `pipeline run --cpt-only` |
-| `run_all_xlsx.sh` | `pipeline run --xlsx-only` |
-| `run_pipeline.sh` | `pipeline run` |
-
-They still work and continue to read from `.env`. Use `src/pipeline.py` (or the Podman image) for new runs.
