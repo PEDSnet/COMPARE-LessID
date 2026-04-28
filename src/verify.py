@@ -49,6 +49,7 @@ PASS = "\033[32mPASS\033[0m"
 FAIL = "\033[31mFAIL\033[0m"
 WARN = "\033[33mWARN\033[0m"
 INFO = "\033[36mINFO\033[0m"
+COPY = "\033[36mCOPY\033[0m"
 
 errors = 0
 
@@ -104,6 +105,10 @@ out_names = {os.path.basename(f) for f in out_xls}
 for src_path in src_xls:
     name = os.path.basename(src_path)
     out_path = os.path.join(out_dir, name)
+
+    if 'edc_discrepancies' in name.lower():
+        print(f"  [{COPY}] {name}: verbatim copy — not subject to ID verification")
+        continue
 
     if name not in out_names:
         print(f"  [{FAIL}] Missing output: {name}")
@@ -370,7 +375,7 @@ libname chk clear;
         tf_path = tf.name
 
     log_path = tf_path.replace('.sas', '.log')
-    sas_bin = '/host_sas' if os.path.isfile('/host_sas') else 'sas'
+    sas_bin = 'sas'
     result = subprocess.run(
         [sas_bin, '-nodms', '-log', log_path, tf_path],
         capture_output=True, text=True, timeout=300

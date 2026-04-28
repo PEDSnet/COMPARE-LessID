@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-build_site_mapping.py  <site_name> <cpt_ids_csv> <xlsx_dir> <mapping_csv> <report_txt>
+build_site_mapping.py  <site_name> <cpt_ids_csv> <xlsx_dir> <mapping_csv> <report_txt> <site_meta_csv> <query_version>
 
 Builds (or cumulatively extends) the site-level mapping.csv.
 
-site_name format: {SITE}_compare[_anything...]_{q\\d+}
-  e.g. C7LC_compare_deq_q01  →  site_code=C7LC, query=q01
+site_code is read from site_meta.csv (DATAMARTID from HARVEST) — authoritative.
+query_version is passed explicitly from the pipeline config (e.g. "1").
+Folder-name parsing is used only as a last-resort fallback if site_meta.csv is missing.
 
 The mapping is cumulative across queries:
   - Existing rows are never changed (surrogate IDs are immutable).
@@ -24,25 +25,40 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from rules import is_remap_col, mapping_col, prefix_for, XLSX_COLUMN_MAP, norm, patch_openpyxl
 patch_openpyxl()
 
-if len(sys.argv) != 6:
-    print("Usage: build_site_mapping.py <site_name> <cpt_ids_csv> <xlsx_dir> <mapping_csv> <report_txt>")
+if len(sys.argv) != 9:
+    print("Usage: build_site_mapping.py <site_name> <cpt_ids_csv> <xlsx_dir> <mapping_csv> <report_txt> <site_meta_csv> <query_version> <pre_redacted_str>")
     sys.exit(1)
 
-SITE_NAME   = sys.argv[1]
-CPT_IDS_CSV = sys.argv[2]
-XLSX_DIR    = sys.argv[3]
-MAPPING_CSV = sys.argv[4]
-REPORT_TXT  = sys.argv[5]
+SITE_NAME     = sys.argv[1]
+CPT_IDS_CSV   = sys.argv[2]
+XLSX_DIR      = sys.argv[3]
+MAPPING_CSV   = sys.argv[4]
+REPORT_TXT    = sys.argv[5]
+SITE_META_CSV = sys.argv[6]
+QUERY_VERSION = sys.argv[7]  # integer as string, e.g. "1"
+# Colon-separated list of pre-redacted placeholder values (case-insensitive)
+# that should never receive a surrogate ID.  e.g. "xxx:redacted:n/a"
+_pre_redacted_raw = sys.argv[8]
+PRE_REDACTED = {v.strip().lower() for v in _pre_redacted_raw.split(':') if v.strip()}
 
-# ── Parse site_code and query from folder name ───────────────────────────────
-# Pattern: {SITE}_compare[_anything...]_{q\d+}
-_m = re.match(r'^(?P<site>.+?)_compare.*?_(q\d+)$', SITE_NAME, re.IGNORECASE)
-if not _m:
-    print(f"ERROR: Cannot parse site/query from folder name: {SITE_NAME!r}", file=sys.stderr)
-    print("  Expected pattern: SITE_compare[...]_qNN  (e.g. C7LC_compare_deq_q01)", file=sys.stderr)
-    sys.exit(1)
-site_code = _m.group('site').upper()
-query     = _m.group(2).lower()   # e.g. "q01"
+# ── Determine site_code and query ─────────────────────────────────────────────
+# site_code: read from site_meta.csv (DATAMARTID from HARVEST) — authoritative
+# query:     from query_version arg (passed from config) — no folder-name parsing
+query = QUERY_VERSION
+site_code = None
+if os.path.exists(SITE_META_CSV):
+    with open(SITE_META_CSV, newline='', encoding='utf-8') as _fh:
+        _row = next(csv.DictReader(_fh), None)
+        if _row:
+            site_code = (_row.get('datamartid') or '').strip().upper()
+if not site_code:
+    print(f"WARNING: Could not read datamartid from {SITE_META_CSV!r}. "
+          "Falling back to folder name.", file=sys.stderr)
+    _m = re.match(r'^(?P<site>.+?)_compare.*?_(q\d+)$', SITE_NAME, re.IGNORECASE)
+    if not _m:
+        print(f"ERROR: Cannot parse site code from folder name: {SITE_NAME!r}", file=sys.stderr)
+        sys.exit(1)
+    site_code = _m.group('site').upper()
 
 # ── Load existing mapping (cumulative) ───────────────────────────────────────
 # existing: dict[(column, original_value)] -> (new_id, query_first_seen)
@@ -85,6 +101,8 @@ if os.path.exists(CPT_IDS_CSV):
             if not is_remap_col(col):
                 continue
             key = (mapping_col(col), val)
+            if val.lower() in PRE_REDACTED:
+                continue
             if key not in existing and key not in new_pairs:
                 new_pairs.add(key)
                 cpt_pairs += 1
@@ -92,6 +110,8 @@ if os.path.exists(CPT_IDS_CSV):
 for name in sorted(os.listdir(XLSX_DIR)):
     if not name.lower().endswith(".xlsx"):
         continue
+    if 'edc_discrepancies' in name.lower():
+        continue  # verbatim copy — not remapped, skip to avoid placeholder values entering mapping
     path = os.path.join(XLSX_DIR, name)
     if not os.path.isfile(path):
         continue
@@ -120,6 +140,8 @@ for name in sorted(os.listdir(XLSX_DIR)):
             for i, col in id_idx:
                 val = norm(row[i].value)
                 if not val:
+                    continue
+                if val.lower() in PRE_REDACTED:
                     continue
                 key = (col, val)
                 if key not in existing and key not in new_pairs:

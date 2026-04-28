@@ -62,3 +62,24 @@ proc export data=id_values_long
     dbms=csv
     replace;
 run;
+
+/* ── Emit DATAMARTID from HARVEST for site identification ──────────────────── */
+%macro _write_site_meta;
+    %if %sysfunc(exist(inlib.harvest)) %then %do;
+        proc sql noprint;
+            select strip(datamartid) into :_datamartid trimmed
+            from inlib.harvest
+            where not missing(datamartid);
+        quit;
+        %if %symexist(_datamartid) and %length(&_datamartid) > 0 %then %do;
+            data _null_;
+                file "&output_meta_csv";
+                put 'datamartid';
+                put "&_datamartid";
+            run;
+        %end;
+        %else %put WARNING: [lessid] DATAMARTID not found in HARVEST — site_meta.csv not written.;
+    %end;
+    %else %put WARNING: [lessid] HARVEST table not found — site_meta.csv not written.;
+%mend _write_site_meta;
+%_write_site_meta;

@@ -1,6 +1,11 @@
-openpyxl==3.1.5
-click>=8.1
-# tomli is the TOML parser backport for Python < 3.11.
-# Python 3.11+ ships tomllib in the stdlib; tomli is not needed there
-# but installing it does no harm.
-tomli>=2.0; python_version < "3.11"
+# Parsing excel files
+openpyxl
+
+# Lightweight pipeline orchestration
+click
+
+# Install tomli configuration if using Python 3.9
+tomli; python_version < "3.11"
+
+# Live parallel progress display
+rich
