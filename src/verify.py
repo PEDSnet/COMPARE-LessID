@@ -370,7 +370,7 @@ libname chk clear;
         tf_path = tf.name
 
     log_path = tf_path.replace('.sas', '.log')
-    sas_bin = '/host_sas' if os.path.isfile('/host_sas') else 'sas'
+    sas_bin = 'sas'
     result = subprocess.run(
         [sas_bin, '-nodms', '-log', log_path, tf_path],
         capture_output=True, text=True, timeout=300

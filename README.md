@@ -20,85 +20,45 @@ Each site gets its own `mapping.csv` so surrogate IDs are stable across re-runs 
 
 | Requirement | Notes |
 |---|---|
-| **SAS 9.4** | Must be installed and licensed on the host machine. The pipeline calls the `sas` binary via subprocess. |
-| **Podman 4+** | Primary runtime. **No sudo required.** Python is only required for local development (see below). |
-
-### One-time Podman storage setup (per user, pedsdb08)
-
-By default, Podman stores images in `/var/lib/containers/storage` which is small and will fill up. Each user must redirect storage to `/data` **once** before building:
-
-```bash
-# 1. Create your personal image store (no sudo needed — /data/containers is world-writable with sticky bit)
-mkdir -p /data/containers/$USER
-
-# 2. Point Podman at it
-mkdir -p ~/.config/containers
-cat > ~/.config/containers/storage.conf << 'EOF'
-[storage]
-driver = "overlay"
-graphroot = "/data/containers/$USER"
-EOF
-# Substitute your actual username — $USER won't expand inside single-quoted heredoc:
-sed -i "s|\$USER|$USER|g" ~/.config/containers/storage.conf
-
-# 3. Verify
-cat ~/.config/containers/storage.conf
-# Should show: graphroot = "/data/containers/yourname"
-```
-
-You only need to do this once. After that, `podman build` and `podman run` work without sudo.
+| **SAS 9.4** | Must be installed and licensed on the host machine. The pipeline calls `sas` via subprocess. |
+| **Python 3.11+** | Standard system Python; a venv is created automatically on first run. |
 
 ---
 
-## Podman
+## Setup
 
-SAS 9.4 cannot be included in the image (licensing). The image is Python-only; SAS is accessed via a bind-mount of the host SAS installation.
-
-### Build
-
-Each user builds their own local copy of the image (~145 MB, ~1 min):
-
-```bash
-podman build -t lessid .
-```
-
-> **Note:** Images are stored per-user in rootless Podman — other users on the same server cannot see or share your image. Each person runs `podman build` once.
-
-### Configure
-
-Copy the example config. Paths here are **container-internal** — the host-to-container mapping is in `run_lessid.sh` (see Run below):
+Copy and configure:
 
 ```bash
 cp config/lessid.example.toml config/lessid.toml
+# edit config/lessid.toml — set cpt_base, out_base, lookup_base, work_base to real host paths
 ```
 
 `config/lessid.toml` is **gitignored** — it contains absolute paths and must never be committed.
 
 ```toml
 [paths]
-cpt_base    = "/data/source"    # bind-mounted from HOST_SOURCE in run_lessid.sh
-out_base    = "/data/output"
-lookup_base = "/data/lookup"
-work_base   = "/data/work"
-lessid_dir  = "/app"            # repo root inside the container
-sas_bin     = "/host_sas"       # bind-mounted SAS binary
+cpt_base    = "/data/sas_queries/<study_owner>/<study>"
+out_base    = "/data/sas_queries/<your_user>/lessid_drnoc"
+lookup_base = "/data/sas_queries/<your_user>/lessid_lookup"
+work_base   = "/data/sas_queries/<your_user>/lessid_work"
+sas_bin     = "sas"   # resolved via PATH; or set to an absolute path
 
 [processing]
-date_shift_days = 0       # set >0 to enable per-patient date perturbation (future projects)
-sites           = []      # leave empty to auto-discover all sites
+date_shift_days = 0   # set >0 to enable per-patient date perturbation
+sites           = []  # leave empty to auto-discover all sites
 # parallel omitted → auto: max(2, cpu_count-8); on pedsdb08 (32 CPUs) = 24
 ```
 
-### Run
-
-Copy the wrapper script and fill in your host paths (this file is gitignored):
+Copy the run wrapper (gitignored):
 
 ```bash
 cp run_lessid.example.sh run_lessid.sh
-# edit HOST_* variables in run_lessid.sh
 ```
 
-The wrapper auto-detects your SAS binary via `which sas` and bind-mounts everything. Then:
+On the first run the wrapper creates `.venv/` and installs `requirements.txt` automatically. No manual venv setup needed.
+
+## Run
 
 ```bash
 ./run_lessid.sh plan          # dry run — no execution
@@ -125,46 +85,6 @@ lessid pipeline
   Parallel: 24 worker(s)  (cpu_count=32)
   ...
 ```
-
----
-
-## Local development
-
-For development without Podman, install dependencies directly:
-
-```bash
-git clone <repo-url> lessid
-cd lessid
-
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-```
-
-Then run pipeline commands via Python:
-
-```bash
-# plan
-python src/pipeline.py plan
-python src/pipeline.py plan C7LC_compare_deq_q01
-
-# run
-python src/pipeline.py run --yes
-python src/pipeline.py run --site C7LC_compare_deq_q01 --yes --parallel 4
-python src/pipeline.py run --xlsx-only --yes
-
-# verify
-python src/pipeline.py verify
-
-# spotcheck
-python src/pipeline.py spotcheck C7LC_compare_deq_q01
-
-# audit
-python src/pipeline.py audit
-python src/pipeline.py audit C7LC_compare_deq_q01 -o remap_cols.csv
-```
-
-If `config/lessid.toml` does not exist the pipeline falls back to a `.env` file (or exported environment variables) for backwards compatibility with the original shell-script workflow.
 
 ---
 
@@ -211,8 +131,8 @@ lessid_drnoc/
 └── C7LC_compare_deq_q01/
     ├── 20240601_compare_deq_q01.cpt   ← de-identified CPT (SAS transport)
     ├── 20240601_compare_deq_q01.xlsx  ← de-identified XLSX
-    ├── _cpt_completed                 ← marker: CPT phase done
-    └── _xlsx_completed                ← marker: XLSX phase done
+    ├── .cpt_completed                 ← marker: CPT phase done (persists after verify)
+    └── .xlsx_completed                ← marker: XLSX phase done (persists after verify)
 
 lessid_lookup/                         ← KEEP RESTRICTED (contains raw IDs)
 └── C7LC_compare_deq_q01/

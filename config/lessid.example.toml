@@ -7,28 +7,22 @@
 #   # then edit config/lessid.toml with your actual paths
 
 # ── Paths ───────────────────────────────────────────────────────────────────
-# These paths are container-internal. The host-to-container mapping is defined
-# in compose.yml (copy compose.example.yml and fill in your host paths).
+# Set these to real host paths. config/lessid.toml is gitignored — never commit it.
 [paths]
 # Directory containing per-site CPT source folders (each with a drnoc/ subdir)
-cpt_base    = "/data/source"
+cpt_base    = "/data/sas_queries/<study_owner>/<study>"
 
 # Directory where de-identified CPT outputs are written (one subdir per site)
-out_base    = "/data/output"
+out_base    = "/data/sas_queries/<your_user>/lessid_drnoc"
 
 # RESTRICTED: Directory where per-site mapping CSVs are stored (contains raw IDs)
-lookup_base = "/data/lookup"
+lookup_base = "/data/sas_queries/<your_user>/lessid_lookup"
 
 # Working directory for intermediate SAS datasets
-work_base   = "/data/work"
+work_base   = "/data/sas_queries/<your_user>/lessid_work"
 
-# Root of this lessid repository (inside the container, the repo is at /app)
-lessid_dir  = "/app"
-
-# Path to the SAS executable inside the container.
-# SAS is not installed in the image — bind-mount the host SAS installation
-# and set this to the mounted binary (see compose.example.yml).
-sas_bin     = "/host_sas"
+# SAS executable — "sas" resolves via PATH; set to an absolute path to pin it
+sas_bin     = "sas"
 
 # ── Processing ──────────────────────────────────────────────────────────────
 [processing]
