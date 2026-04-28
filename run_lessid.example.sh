@@ -56,7 +56,14 @@ HOST_CONFIG="$(dirname "$0")/config/lessid.toml"
 
 # ── Container invocation ─────────────────────────────────────────────────────
 
-[[ "${1:-}" == "spotcheck" ]] && TTY_FLAGS="-it" || TTY_FLAGS=""
+# spotcheck needs a full TTY; run needs stdin for the confirmation prompt
+if [[ "${1:-}" == "spotcheck" ]]; then
+    TTY_FLAGS="-it"
+elif [[ "${1:-}" == "run" ]]; then
+    TTY_FLAGS="-i"
+else
+    TTY_FLAGS=""
+fi
 
 # Auto-capture log for run/verify — written to HOST_OUTPUT/logs/ alongside the data
 if [[ "${1:-}" == "run" || "${1:-}" == "verify" ]]; then
