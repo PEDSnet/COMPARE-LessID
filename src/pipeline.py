@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 """
-lessid pipeline CLI — replaces run_all_sites.sh / run_all_xlsx.sh.
+lessid pipeline CLI
 
 Commands
 --------
   plan    [SITE]          Print what columns would be remapped (no execution)
-  run     [--site S]...   Full pipeline: CPT → mapping → XLSX → verify
+  run     [--site S]...   Full pipeline: CPT → mapping → verify
   verify  [--site S]...   Verification pass only
   spotcheck SITE          Launch interactive spot-check REPL
 
 Common flags
 ------------
-  --force / -f            Reprocess even if .cpt_completed / .xlsx_completed marker exists
+  --force / -f            Reprocess even if .cpt_completed marker exists
   --yes / -y              Skip confirmation prompt before running
   --parallel N            Process N sites concurrently (default: max(2, cpu_count-8))
   --config PATH           Path to lessid.toml  (default: config/lessid.toml in repo root)
@@ -475,111 +475,6 @@ run;
             q.put_nowait({'event': 'done', 'site': site_name, 'result': result})
         return result
 
-
-def run_site_xlsx(site_name: str, cfg: dict, force: bool = False, q=None) -> dict:
-    """Run the XLSX de-identification pass for one site."""
-    t0 = time.time()
-    paths = cfg['paths']
-    cpt_base    = paths['cpt_base']
-    out_base    = paths['out_base']
-    lookup_base = paths['lookup_base']
-    lessid_dir  = paths['lessid_dir']
-
-    site_drnoc  = Path(cpt_base) / site_name / 'drnoc'
-    site_out    = Path(out_base) / site_name
-    site_code, _ = _parse_site_query(site_name)
-    mapping_csv = Path(lookup_base) / site_code / f'{site_code}_mapping.csv'
-
-    if (site_out / '.xlsx_completed').exists() and not force:
-        result = {'site': site_name, 'status': 'SKIPPED', 'files': '-', 'mappings': '-',
-                  'elapsed': 0.0, 'error': None}
-        if q is not None:
-            q.put_nowait({'event': 'done', 'site': site_name, 'result': result})
-        return result
-
-    if not mapping_csv.exists():
-        result = {'site': site_name, 'status': 'NO MAPPING', 'files': '-', 'mappings': '-',
-                  'elapsed': time.time() - t0, 'error': 'No mapping.csv'}
-        if q is not None:
-            q.put_nowait({'event': 'done', 'site': site_name, 'result': result})
-        return result
-
-    xlsx_files = sorted(site_drnoc.glob('*.xlsx'))
-    if not xlsx_files:
-        result = {'site': site_name, 'status': 'NO XLSX', 'files': 0, 'mappings': '-',
-                  'elapsed': time.time() - t0, 'error': None}
-        if q is not None:
-            q.put_nowait({'event': 'done', 'site': site_name, 'result': result})
-        return result
-
-    site_out.mkdir(parents=True, exist_ok=True)
-    py_dir = _find_py_dir(lessid_dir)
-
-    if q is not None:
-        q.put_nowait({'event': 'start', 'site': site_name, 't0': t0})
-
-    pre_redacted_str = ':'.join(cfg['columns'].get(
-        'pre_redacted_values', ['xxx', 'redacted', 'n/a', 'na', 'unknown', 'unk', '-', '--', 'masked']
-    ))
-    remap_count = sum(1 for f in xlsx_files if 'edc_discrepancies' not in f.name.lower())
-
-    try:
-        _step_t = time.time()
-        _log_step(
-            f"  [{site_name}] XLSX: remapping {remap_count} file(s) "
-            f"({len(xlsx_files) - remap_count} verbatim copy)  ({_ts(t0)})",
-            q, site_name,
-        )
-        for xlsx_file in xlsx_files:
-            out_xlsx = site_out / xlsx_file.name
-            # EDC discrepancy files contain raw EDC data and must not be de-identified
-            if 'edc_discrepancies' in xlsx_file.name.lower():
-                import shutil
-                shutil.copy2(xlsx_file, out_xlsx)
-                continue
-            subprocess.run([
-                sys.executable,
-                str(py_dir / 'map_xlsx.py'),
-                str(mapping_csv),
-                str(xlsx_file),
-                str(out_xlsx),
-                pre_redacted_str,
-            ], check=True, capture_output=True)
-        _log_step(f"  [{site_name}] XLSX done  "
-                  f"({_fmt_elapsed(time.time()-_step_t)}, {_ts(t0)})", q, site_name)
-
-        # Copy logs and PDFs from source drnoc folder alongside the XLSX outputs
-        import shutil as _shutil
-        for ext in ('*.log', '*.pdf'):
-            for src_file in sorted(site_drnoc.glob(ext)):
-                _shutil.copy2(src_file, site_out / src_file.name)
-
-        mapping_count = _count_csv_rows(mapping_csv)
-        (site_out / '.xlsx_completed').write_text(
-            'This file is a lessid pipeline checkpoint and is not part of the study deliverable.\n'
-            'If you received this file from PEDSnet, you are free to delete it.\n'
-        )
-
-        result = {
-            'site': site_name, 'status': 'OK',
-            'files': len(xlsx_files), 'mappings': mapping_count,
-            'elapsed': time.time() - t0, 'error': None,
-        }
-        if q is not None:
-            q.put_nowait({'event': 'done', 'site': site_name, 'result': result})
-        return result
-
-    except Exception as exc:
-        result = {
-            'site': site_name, 'status': 'FAILED',
-            'files': '-', 'mappings': '-',
-            'elapsed': time.time() - t0, 'error': str(exc),
-        }
-        if q is not None:
-            q.put_nowait({'event': 'done', 'site': site_name, 'result': result})
-        return result
-
-
 def run_site_verify(site_name: str, cfg: dict) -> dict:
     """Run verify.py for one site. Returns {site, status, error}."""
     t0 = time.time()
@@ -927,10 +822,8 @@ def plan(ctx, site):
               help='Skip confirmation prompt')
 @click.option('--parallel', '-j', 'n_parallel', default=None, type=int, metavar='N',
               help='Number of sites to run in parallel (overrides config)')
-@click.option('--cpt-only', is_flag=True, help='Run CPT phase only (skip XLSX + verify)')
-@click.option('--xlsx-only', is_flag=True, help='Run XLSX + verify only (skip CPT)')
 @click.pass_context
-def run(ctx, sites_opt, force, yes, n_parallel, cpt_only, xlsx_only):
+def run(ctx, sites_opt, force, yes, n_parallel):
     """Run the full pipeline for one or all sites."""
     cfg = ctx.obj['cfg']
     paths = cfg['paths']
@@ -950,8 +843,6 @@ def run(ctx, sites_opt, force, yes, n_parallel, cpt_only, xlsx_only):
     click.echo(f'  Sites:    {len(sites)}')
     click.echo(f'  Force:    {effective_force}')
     click.echo(f'  Parallel: {n_workers} worker(s)  (cpu_count={os.cpu_count()})')
-    click.echo(f'  CPT:      {not xlsx_only}')
-    click.echo(f'  XLSX:     {not cpt_only}')
     click.echo(f'  Sites:\n' + '\n'.join(f'    • {s}' for s in sites))
 
     if not yes:
@@ -961,58 +852,29 @@ def run(ctx, sites_opt, force, yes, n_parallel, cpt_only, xlsx_only):
     t_total = time.time()
 
     # ── CPT phase ──
-    if not xlsx_only:
-        click.echo('\n─── Phase 1: CPT ───────────────────────────────')
-        cpt_results = _run_phase_live(
-            run_site_cpt, sites, cfg, effective_force, n_workers,
-            'Phase 1: CPT', ['tables', 'mappings'],
-        )
-        _print_summary_table(
-            ['Site', 'Tables', 'Mappings', 'Time', 'Status'],
-            [[r['site'], r['tables'], r['mappings'], _fmt_elapsed(r['elapsed']), r['status']]
-             for r in cpt_results],
-            'CPT results',
-        )
-        failed = [r for r in cpt_results if r['status'] == 'FAILED']
-        if failed:
-            click.echo(f'\n{len(failed)} site(s) failed CPT phase. Aborting.', err=True)
-            for r in failed:
-                click.echo(f'  {r["site"]}: {r["error"]}', err=True)
-            sys.exit(1)
+    click.echo('\n─── CPT ───────────────────────────────')
+    cpt_results = _run_phase_live(
+        run_site_cpt, sites, cfg, effective_force, n_workers,
+        'CPT', ['tables', 'mappings'],
+    )
+    _print_summary_table(
+        ['Site', 'Tables', 'Mappings', 'Time', 'Status'],
+        [[r['site'], r['tables'], r['mappings'], _fmt_elapsed(r['elapsed']), r['status']]
+         for r in cpt_results],
+        'CPT results',
+    )
+    failed = [r for r in cpt_results if r['status'] == 'FAILED']
+    if failed:
+        click.echo(f'\n{len(failed)} site(s) failed CPT phase. Aborting.', err=True)
+        for r in failed:
+            click.echo(f'  {r["site"]}: {r["error"]}', err=True)
+        sys.exit(1)
 
-    # ── XLSX phase ──
-    if not cpt_only:
-        click.echo('\n─── Phase 2: XLSX ──────────────────────────────')
-        # Only process sites that completed CPT (or were already done)
-        xlsx_sites = sites if xlsx_only else [
-            r['site'] for r in cpt_results if r['status'] in ('OK', 'SKIPPED')
-        ]
-        xlsx_results = _run_phase_live(
-            run_site_xlsx, xlsx_sites, cfg, effective_force, n_workers,
-            'Phase 2: XLSX', ['files', 'mappings'],
-        )
-        _print_summary_table(
-            ['Site', 'Files', 'Mappings', 'Time', 'Status'],
-            [[r['site'], r['files'], r['mappings'], _fmt_elapsed(r['elapsed']), r['status']]
-             for r in xlsx_results],
-            'XLSX results',
-        )
-
-        # ── Verify phase ──
-        click.echo('\n─── Phase 3: Verify ────────────────────────────')
-        verify_sites = [r['site'] for r in xlsx_results if r['status'] in ('OK', 'SKIPPED')]
-        verify_results = []
-        for s in verify_sites:
-            click.echo(f'  verifying {s}...')
-            verify_results.append(run_site_verify(s, cfg))
-
-        verify_rows = [[r['site'], r['status']] for r in verify_results]
-        _print_summary_table(['Site', 'Status'], verify_rows, 'Verify results')
-
-        # ── Backup phase ──
-        verified_ok = [r['site'] for r in verify_results if r['status'] == 'OK']
-        if cfg['backup']['enabled'] and verified_ok:
-            backup_run(verified_ok, cfg, run_ts)
+    # ── Auto-backup (if enabled in config) ──
+    if cfg['backup']['enabled']:
+        completed = [r['site'] for r in cpt_results if r['status'] in ('OK', 'SKIPPED')]
+        if completed:
+            backup_run(completed, cfg, run_ts)
 
     click.echo(f'\nTotal elapsed: {_fmt_elapsed(time.time() - t_total)}')
 
@@ -1054,6 +916,30 @@ def verify(ctx, sites_opt):
     failed = [r for r in results if r['status'] == 'FAILED']
     if failed:
         sys.exit(1)
+
+
+# ── backup ───────────────────────────────────────────────────────────────────
+
+@cli.command()
+@click.option('--site', 'sites_opt', multiple=True, metavar='SITE',
+              help='Site(s) to back up (default: all)')
+@click.pass_context
+def backup(ctx, sites_opt):
+    """Copy lookup CSVs and de-identified outputs to backup_base (Isilon)."""
+    cfg = ctx.obj['cfg']
+    _validate_paths(cfg['paths'])
+
+    if not cfg['backup']['backup_base']:
+        click.echo('ERROR: backup_base is not set in config.', err=True)
+        sys.exit(1)
+
+    sites = resolve_sites(cfg, sites_opt)
+    if not sites:
+        click.echo('No sites found.', err=True)
+        sys.exit(1)
+
+    run_ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    backup_run(sites, cfg, run_ts)
 
 
 # ── spotcheck ────────────────────────────────────────────────────────────────
