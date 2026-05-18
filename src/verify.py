@@ -2,8 +2,12 @@
 """
 verify.py  <site_name>
 
-Spot-checks that IDs have been replaced in XLSX outputs and that CPT output exists.
-Prints a side-by-side diff of raw vs mapped values for each ID column found.
+CPT-only verification (no XLSX):
+  1. CPT output exists and is non-empty
+  2. Mapping CSV exists and loads
+  3. All new_id values match PAT/ENC/PRV/FAC/ID_XXXXXXXX format
+  4. LessID uniqueness: no two originals in the same column share a new_id
+  5. CPT spot-check via SAS: sampled original IDs absent, mapped IDs present
 """
 
 import csv
@@ -11,16 +15,10 @@ import glob
 import os
 import re
 import sys
-import warnings
-import openpyxl
-warnings.filterwarnings("ignore", message="Cannot parse header or footer", category=UserWarning, module="openpyxl")
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rules import is_remap_col, is_redact_col, mapping_col, XLSX_COLUMN_MAP, patch_openpyxl
-patch_openpyxl()
 
 if len(sys.argv) != 2:
     print("Usage: verify.py <site_name>")
-    print("  e.g. verify.py C7LC_compare_deq_q01")
+    print("  e.g. verify.py C7LC_compare_deq_q02")
     sys.exit(1)
 
 SITE = sys.argv[1]
@@ -86,7 +84,8 @@ with open(mapping_csv, newline="", encoding="utf-8") as fh:
 
 print(f"  [{INFO}] {len(mapping):,} entries loaded")
 
-# ── 3. Cross-check: find mappings that are NOT in PAT/ENC/PRV/FAC/ID format ──
+# ── 3. new_id format check ──────────────────────────────────────────────────
+print(f"\n[3] LessID format check")
 bad_new_ids = [(k, v) for k, v in mapping.items() if not MAPPED_PATTERN.match(v)]
 if bad_new_ids:
     print(f"  [{FAIL}] {len(bad_new_ids)} mapping entries have non-standard new_id format")
@@ -96,254 +95,78 @@ if bad_new_ids:
 else:
     print(f"  [{PASS}] All new_id values match PAT/ENC/PRV/FAC/ID_XXXXXXXX format")
 
-# ── 4. XLSX verification ────────────────────────────────────────────────────
-print(f"\n[3] XLSX spot-check")
-src_xls  = sorted(glob.glob(os.path.join(src_drnoc, "*.xlsx")))
-out_xls  = sorted(glob.glob(os.path.join(out_dir,   "*.xlsx")))
-out_names = {os.path.basename(f) for f in out_xls}
+# ── 4. LessID uniqueness ────────────────────────────────────────────────────
+# Within each column, no two distinct originals should share the same new_id.
+print(f"\n[4] LessID uniqueness (no collisions)")
+# Group by column: col -> {new_id: [orig, ...]}
+from collections import defaultdict
+col_to_reverse: dict = defaultdict(lambda: defaultdict(list))
+for (col, orig), nid in mapping.items():
+    col_to_reverse[col][nid].append(orig)
 
-for src_path in src_xls:
-    name = os.path.basename(src_path)
-    out_path = os.path.join(out_dir, name)
+collision_count = 0
+for col, rev in col_to_reverse.items():
+    collisions = {nid: origs for nid, origs in rev.items() if len(origs) > 1}
+    if collisions:
+        collision_count += len(collisions)
+        print(f"  [{FAIL}] col={col}: {len(collisions)} lessID(s) map to multiple originals")
+        for nid, origs in list(collisions.items())[:3]:
+            print(f"           {nid} ← {origs[:4]}")
 
-    if 'edc_discrepancies' in name.lower():
-        print(f"  [{COPY}] {name}: verbatim copy — not subject to ID verification")
-        continue
-
-    if name not in out_names:
-        print(f"  [{FAIL}] Missing output: {name}")
-        errors += 1
-        continue
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        try:
-            wb_src = openpyxl.load_workbook(src_path, read_only=True)
-            wb_out = openpyxl.load_workbook(out_path, read_only=True)
-        except Exception as e:
-            print(f"  [{WARN}] Could not open {name}: {e}")
-            continue
-
-    total_replaced = 0
-    total_raw_leaked = 0
-    detail_lines = []
-
-    for ws_src, ws_out in zip(wb_src.worksheets, wb_out.worksheets):
-        src_rows = list(ws_src.iter_rows(min_row=1, max_row=2, values_only=True))
-        out_rows = list(ws_out.iter_rows(min_row=1, max_row=2, values_only=True))
-        if not src_rows:
-            continue
-
-        headers = [str(h).strip() if h is not None else "" for h in src_rows[0]]
-        if headers and headers[0] == "No eligible records found":
-            continue
-
-        id_cols = []       # (col_idx, header_str, canonical_mapping_key)
-        redact_idxs = []   # col_idx only
-        for i, h in enumerate(headers):
-            raw_col = h.lower()
-            cdm = XLSX_COLUMN_MAP.get(raw_col, raw_col)
-            if is_redact_col(cdm):
-                redact_idxs.append(i)
-            elif is_remap_col(cdm):
-                id_cols.append((i, h, mapping_col(cdm)))
-
-        if not id_cols and not redact_idxs:
-            continue
-
-        # scan all rows for the sheet
-        all_src = list(ws_src.iter_rows(min_row=2, values_only=True))
-        all_out = list(ws_out.iter_rows(min_row=2, values_only=True))
-
-        for r_src, r_out in zip(all_src, all_out):
-            # Check redact columns: original value must NOT appear in output
-            for i in redact_idxs:
-                sv = str(r_src[i]).strip() if r_src[i] is not None else ""
-                ov = str(r_out[i]).strip() if r_out[i] is not None else ""
-                if sv and ov == sv:
-                    total_raw_leaked += 1
-                    if len(detail_lines) < 3:
-                        detail_lines.append(f"    col='{headers[i]}' REDACT value leaked: {sv!r}")
-            # Check remap columns
-            for i, header, cdm in id_cols:
-                sv = str(r_src[i]).strip() if r_src[i] is not None else ""
-                ov = str(r_out[i]).strip() if r_out[i] is not None else ""
-                if not sv:
-                    continue
-                expected = mapping.get((cdm, sv))
-                if expected is None:
-                    if sv == ov:
-                        pass  # unmapped value left as-is — fine
-                    continue
-                if ov == expected:
-                    total_replaced += 1
-                elif ov == sv:
-                    total_raw_leaked += 1
-                    if len(detail_lines) < 3:
-                        detail_lines.append(f"    col='{header}' raw={sv!r} out={ov!r} expected={expected!r}")
-
-    wb_src.close()
-    wb_out.close()
-
-    if total_raw_leaked > 0:
-        print(f"  [{FAIL}] {name}: {total_replaced} replaced, {total_raw_leaked} RAW IDs still in output")
-        for d in detail_lines:
-            print(d)
-        errors += 1
-    elif total_replaced == 0:
-        # could be all-empty or all-unmapped
-        print(f"  [{WARN}] {name}: no ID columns found or no data rows")
-    else:
-        print(f"  [{PASS}] {name}: {total_replaced} IDs replaced, 0 leaks")
-
-# ── 4b. Cross-consistency: same original ID → same mapped ID in CPT and XLSX ─
-# Strategy: from the XLSX outputs, collect (original_patid, mapped_patid) pairs.
-# Then confirm that mapping.csv also maps that patid to the same value.
-# Since both CPT and XLSX use the same mapping.csv, this proves they are consistent.
-# We also directly confirm by reversing: look up mapped→original in mapping and
-# check that the XLSX output contains expected mapped values for those originals.
-print(f"\n[4] Cross-consistency check (XLSX ↔ mapping.csv ↔ CPT)")
-
-# Build reverse mapping: new_id -> (column, original_value)
-reverse_mapping = {}
-for (col, orig), new_id in mapping.items():
-    if col == "patid":
-        reverse_mapping[new_id] = orig
-
-# Collect (original, mapped) pairs actually seen in XLSX outputs.
-# Strategy: scan the OUTPUT files only. For each patid column cell, look the
-# value up in reverse_mapping. If it's there, we have a confirmed pair.
-# This avoids fragile src-vs-out sheet zipping and MAPPED_PATTERN false negatives.
-xlsx_pat_pairs = {}  # mapped_id -> original_id
-_dbg_files = _dbg_with_patcol = _dbg_rows = 0
-_sample_src_xlsx = None  # filename that yielded the sample pairs
-for out_path in sorted(glob.glob(os.path.join(out_dir, "*.xlsx"))):
-    _dbg_files += 1
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        try:
-            wb_out = openpyxl.load_workbook(out_path, read_only=True)
-        except Exception:
-            continue
-    for ws_out in wb_out.worksheets:
-        rows = list(ws_out.iter_rows(values_only=True))
-        if not rows:
-            continue
-        headers = [str(h).strip() if h is not None else "" for h in rows[0]]
-        if headers and headers[0] == "No eligible records found":
-            continue
-        pat_idx = next(
-            (i for i, h in enumerate(headers)
-             if XLSX_COLUMN_MAP.get(h.lower()) == "patid"
-             or h.lower() in {"patid", "person_id", "org_patid"}),
-            None
-        )
-        if pat_idx is None:
-            continue
-        _dbg_with_patcol += 1
-        for row in rows[1:]:
-            _dbg_rows += 1
-            mapped = str(row[pat_idx]).strip() if row[pat_idx] is not None else ""
-            if not mapped:
-                continue
-            orig = reverse_mapping.get(mapped)
-            if orig:
-                xlsx_pat_pairs[mapped] = orig
-        if len(xlsx_pat_pairs) >= 20:
-            _sample_src_xlsx = os.path.basename(out_path)
-            break
-    wb_out.close()
-    if len(xlsx_pat_pairs) >= 20:
-        break
-    if _sample_src_xlsx is None and xlsx_pat_pairs:
-        _sample_src_xlsx = os.path.basename(out_path)
-
-if not xlsx_pat_pairs:
-    print(f"  [{WARN}] No patient ID replacements found in XLSX outputs to cross-check")
-    print(f"  [{INFO}]   output xlsx scanned: {_dbg_files}, "
-          f"sheets with patid col: {_dbg_with_patcol}, "
-          f"data rows examined: {_dbg_rows}")
-    cross_errors = 0
-    sample_pairs = []
+if collision_count:
+    errors += collision_count
 else:
-    cross_errors = 0
-    sample_pairs = []   # defensive: keep defined even if cross_errors > 0
-    for mapped_id, xlsx_orig in list(xlsx_pat_pairs.items())[:20]:
-        # Confirm mapping.csv agrees
-        mapping_orig = reverse_mapping.get(mapped_id)
-        if mapping_orig is None:
-            print(f"  [{FAIL}] {mapped_id} appears in XLSX output but NOT in mapping.csv")
-            cross_errors += 1
-        elif mapping_orig != xlsx_orig:
-            print(f"  [{FAIL}] {mapped_id}: XLSX source has orig={xlsx_orig!r}, "
-                  f"but mapping.csv says orig={mapping_orig!r}")
-            cross_errors += 1
+    total_cols = len(col_to_reverse)
+    total_ids  = sum(len(rev) for rev in col_to_reverse.values())
+    print(f"  [{PASS}] {total_ids:,} unique lessIDs across {total_cols} column type(s) — no collisions")
 
-    if cross_errors == 0:
-        n = min(20, len(xlsx_pat_pairs))
-        print(f"  [{PASS}] {n} patient IDs checked: XLSX output values match mapping.csv exactly")
-        # Now check CPT agrees via SAS
-        # Build a small CSV of (orig_patid, expected_mapped) to feed to SAS
-        import tempfile as _tf_cross
-        sample_csv = _tf_cross.mktemp(suffix=".csv")
-        sample_pairs = list(xlsx_pat_pairs.items())[:10]
-        with open(sample_csv, "w") as f:
-            f.write("original_patid,expected_mapped\n")
-            for mapped_id, orig in sample_pairs:
-                f.write(f"{orig},{mapped_id}\n")
-        print(f"  [{INFO}] Checking same {len(sample_pairs)} patients exist correctly in CPT...")
-    else:
-        errors += cross_errors
+# ── 5. CPT spot-check via SAS ───────────────────────────────────────────────
+# Pick up to 10 patid sample pairs from mapping.csv.
+# Confirm: (a) original IDs are absent from CPT patid column,
+#          (b) mapped lessIDs are present in CPT patid column.
+print(f"\n[5] CPT ID spot-check (SAS)")
 
-# ── 5. CPT spot-check via SAS cimport + proc contents ──────────────────────
-print(f"\n[5] CPT ID column spot-check (SAS)")
 cpt_out = cpt_files[0] if cpt_files else None
-if cpt_out:
+if not cpt_out:
+    print(f"  [{WARN}] Skipping SAS check — no CPT file")
+else:
+    import subprocess
     import tempfile as _tf
-    chk_dir = _tf.mkdtemp(prefix=f"lessid_verify_{SITE}_")
 
-    # Derive the CPT table name from the XLSX filename that yielded our sample.
-    # XLSX names follow: {SITECODE}_{DATE8}_{TABLENAME}.xlsx
-    # SAS dataset names are uppercased TABLENAME.
-    _cross_ds = "&first_ds"  # fallback
-    if _sample_src_xlsx:
-        m = re.search(r'\d{8}_(.+)\.xlsx$', _sample_src_xlsx, re.IGNORECASE)
-        if m:
-            _cross_ds_name = m.group(1).upper()
-            _cross_ds = f"&cross_ds"
+    # Sample up to 10 (orig, new_id) pairs for patid
+    sample_pairs = [(orig, nid) for (col, orig), nid in mapping.items()
+                    if col == "patid"][:10]
 
-    # Build cross-check SAS code: for each sampled patient, confirm CPT has expected mapped value
-    cross_checks_sas = ""
-    if xlsx_pat_pairs and cross_errors == 0:
-        for mapped_id, orig in sample_pairs:
-            safe_orig = orig.replace("'", "''")
-            safe_mapped = mapped_id.replace("'", "''")
-            cross_checks_sas += f"""
-    data _null_;
-        set chk.{_cross_ds} (obs=50000 keep=patid);
-        where patid = '{safe_mapped}';
-        if _n_ = 1 then put 'CROSS_PASS orig={safe_orig} mapped={safe_mapped}';
-    run;
-    data _null_;
-        set chk.{_cross_ds} (obs=50000 keep=patid);
-        where patid = '{safe_orig}';
-        if _n_ = 1 then put 'CROSS_FAIL raw_id_found orig={safe_orig}';
-    run;
-"""
+    if not sample_pairs:
+        print(f"  [{WARN}] No patid entries in mapping.csv — skipping CPT cross-check")
+    else:
+        chk_dir = _tf.mkdtemp(prefix=f"lessid_verify_{SITE}_")
 
-    # Build the macro variable assignment for the cross-check table (if we resolved one)
-    cross_ds_assign = ""
-    if _sample_src_xlsx:
-        m = re.search(r'\d{8}_(.+)\.xlsx$', _sample_src_xlsx, re.IGNORECASE)
-        if m:
-            _cross_ds_name = m.group(1).upper()
-            cross_ds_assign = f"%let cross_ds = {_cross_ds_name};"
+        # Build SAS checks: for each sample, assert orig absent, mapped present
+        absent_checks = ""
+        present_checks = ""
+        for orig, mapped in sample_pairs:
+            s_orig   = orig.replace("'", "''")
+            s_mapped = mapped.replace("'", "''")
+            absent_checks += (
+                f"    data _null_; set chk.&first_ds (keep=patid);\n"
+                f"        where patid = '{s_orig}';\n"
+                f"        if _n_ = 1 then put 'FAIL_RAW_PRESENT orig={s_orig}';\n"
+                f"    run;\n"
+            )
+            present_checks += (
+                f"    data _null_; set chk.&first_ds (keep=patid);\n"
+                f"        where patid = '{s_mapped}';\n"
+                f"        if _n_ = 0 then put 'FAIL_MAPPED_ABSENT mapped={s_mapped} orig={s_orig}';\n"
+                f"        else put 'PASS_MAPPED_PRESENT mapped={s_mapped}';\n"
+                f"        stop;\n"
+                f"    run;\n"
+            )
 
-    sas_code = f"""
+        sas_code = f"""
 libname chk "{chk_dir}";
 proc cimport infile="{cpt_out}" library=chk; run;
 
-/* pick the first table that has a patid column (used for raw-ID scan) */
 proc sql noprint;
     select memname into :first_ds trimmed
     from dictionary.columns
@@ -351,73 +174,83 @@ proc sql noprint;
     having monotonic() = min(monotonic());
 quit;
 
-/* table to use for cross-check — derived from XLSX filename */
-{cross_ds_assign}
-
 %macro chk_ids;
 %if %symexist(first_ds) and %superq(first_ds) ne %then %do;
+    /* raw-format scan: flag any patid that doesn't look like a lessID */
     data _null_;
-        set chk.&first_ds (obs=500 keep=patid);
-        if patid ne '' and not prxmatch('/^(PAT|ENC|PRV|FAC|ID)_[A-Z0-9]+_\\d+$/', strip(patid)) then do;
-            put 'WARN_RAW_ID patid=' patid;
-        end;
+        set chk.&first_ds (obs=1000 keep=patid);
+        if patid ne '' and not prxmatch('/^(PAT|ENC|PRV|FAC|ID)_[A-Z0-9]+_\\d+$/', strip(patid))
+            then put 'WARN_RAW_ID patid=' patid;
     run;
-{cross_checks_sas}
+    /* sample-based checks */
+{absent_checks}
+{present_checks}
+%end;
+%else %do;
+    %put WARN_NO_PATID_TABLE no dataset with a patid column found in CPT;
 %end;
 %mend; %chk_ids;
 
 proc datasets library=chk kill nolist; run; quit;
 libname chk clear;
 """
-    import subprocess, tempfile as _tf2
-    with _tf2.NamedTemporaryFile(mode='w', suffix='.sas', delete=False) as tf:
-        tf.write(sas_code)
-        tf_path = tf.name
+        with _tf.NamedTemporaryFile(mode='w', suffix='.sas', delete=False) as tf:
+            tf.write(sas_code)
+            tf_path = tf.name
 
-    log_path = tf_path.replace('.sas', '.log')
-    sas_bin = 'sas'
-    result = subprocess.run(
-        [sas_bin, '-nodms', '-log', log_path, tf_path],
-        capture_output=True, text=True, timeout=300
-    )
-    os.unlink(tf_path)
+        log_path = tf_path.replace('.sas', '.log')
+        result = subprocess.run(
+            ['sas', '-nodms', '-log', log_path, tf_path],
+            capture_output=True, text=True, timeout=300
+        )
+        os.unlink(tf_path)
 
-    if os.path.exists(log_path):
-        with open(log_path) as lf:
-            log = lf.read()
-        os.unlink(log_path)
+        import shutil
+        log = ""
+        if os.path.exists(log_path):
+            with open(log_path) as lf:
+                log = lf.read()
+            os.unlink(log_path)
+        shutil.rmtree(chk_dir, ignore_errors=True)
 
-        warn_raw = [l for l in log.splitlines() if l.startswith('WARN_RAW_ID')]
-        cross_pass = [l for l in log.splitlines() if l.startswith('CROSS_PASS')]
-        cross_fail = [l for l in log.splitlines() if l.startswith('CROSS_FAIL')]
-        sas_errors = [l for l in log.splitlines() if l.strip().startswith('ERROR')]
+        sas_errors      = [l for l in log.splitlines() if l.strip().startswith('ERROR')]
+        warn_raw        = [l for l in log.splitlines() if l.startswith('WARN_RAW_ID')]
+        warn_no_tbl     = [l for l in log.splitlines() if 'WARN_NO_PATID_TABLE' in l]
+        fail_raw        = [l for l in log.splitlines() if l.startswith('FAIL_RAW_PRESENT')]
+        fail_absent     = [l for l in log.splitlines() if l.startswith('FAIL_MAPPED_ABSENT')]
+        pass_present    = [l for l in log.splitlines() if l.startswith('PASS_MAPPED_PRESENT')]
 
         if sas_errors:
             print(f"  [{FAIL}] SAS errors during CPT check:")
             for l in sas_errors[:5]:
                 print(f"    {l}")
             errors += 1
-        elif warn_raw:
-            print(f"  [{FAIL}] CPT contains un-mapped raw IDs:")
-            for l in warn_raw[:10]:
-                print(f"    {l}")
-            errors += 1
+        elif warn_no_tbl:
+            print(f"  [{WARN}] CPT imported but contains no table with a patid column")
         else:
-            print(f"  [{PASS}] CPT: no raw IDs in patid column (500-row sample)")
+            if warn_raw:
+                print(f"  [{FAIL}] CPT contains {len(warn_raw)} raw (un-mapped) patid value(s):")
+                for l in warn_raw[:5]:
+                    print(f"    {l}")
+                errors += 1
+            else:
+                print(f"  [{PASS}] CPT raw-ID scan: no un-mapped patids in first 1 000 rows")
 
-        if cross_fail:
-            print(f"  [{FAIL}] CPT still contains original (unmapped) patient IDs:")
-            for l in cross_fail[:5]:
-                print(f"    {l}")
-            errors += 1
-        elif cross_pass:
-            print(f"  [{PASS}] CPT ↔ XLSX cross-check: {len(cross_pass)}/{len(sample_pairs)} "
-                  f"patients confirmed identical mapping in both files")
-        elif xlsx_pat_pairs and cross_errors == 0:
-            _m = re.search(r'\d{8}_(.+)\.xlsx$', _sample_src_xlsx or "", re.IGNORECASE)
-            tbl = _m.group(1).upper() if _m else "(unknown)"
-            print(f"  [{WARN}] CPT cross-check: sampled patients not found in CPT table '{tbl}'")
-        import shutil; shutil.rmtree(chk_dir, ignore_errors=True)
+            if fail_raw:
+                print(f"  [{FAIL}] Original IDs still present in CPT:")
+                for l in fail_raw[:5]:
+                    print(f"    {l}")
+                errors += len(fail_raw)
+
+            if fail_absent:
+                print(f"  [{FAIL}] Expected mapped IDs missing from CPT:")
+                for l in fail_absent[:5]:
+                    print(f"    {l}")
+                errors += len(fail_absent)
+
+            if pass_present and not fail_raw and not fail_absent:
+                print(f"  [{PASS}] {len(pass_present)}/{len(sample_pairs)} sampled lessIDs "
+                      f"confirmed present; originals absent")
 
 # ── Summary ─────────────────────────────────────────────────────────────────
 print(f"\n{'═'*60}")
