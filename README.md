@@ -1,6 +1,6 @@
 # LessID_v2
 
-A Python + SAS pipeline for de-identifying CDM (Common Data Model) datasets for the COMPARE study. Raw patient, encounter, provider, and facility IDs are replaced with deterministic, site-scoped surrogate IDs. XLSX reports receive the same replacements so the two outputs stay cross-consistent.
+A Python + SAS pipeline for de-identifying CDM (Common Data Model) datasets for the COMPARE study. Raw patient, encounter, provider, and facility IDs are replaced with deterministic, site-scoped surrogate IDs.
 
 ---
 
@@ -9,19 +9,15 @@ A Python + SAS pipeline for de-identifying CDM (Common Data Model) datasets for 
 ```mermaid
 flowchart LR
     CPT[CPT\nSAS transport]
-    XLSX[XLSX reports]
     CI[collect IDs]
     BM[build mapping]
     AM[apply mapping]
     OUT_CPT[de-identified CPT]
-    OUT_XLSX[de-identified XLSX]
 
     CPT --> CI
-    XLSX --> CI
     CI --> BM
     BM --> AM
     AM --> OUT_CPT
-    BM --> OUT_XLSX
 ```
 
 Each site gets its own `mapping.csv` so surrogate IDs are stable across re-runs and never collide across sites.
@@ -82,9 +78,9 @@ On first run, the wrapper auto-creates `.venv/` and installs `requirements.txt`.
 | Command | Description |
 |---|---|
 | `lessid plan [SITE]` | Preview which columns will be remapped — no execution |
-| `lessid run [--site S] [--yes] [--parallel N] [--cpt-only] [--xlsx-only] [--force]` | Full pipeline: CPT → mapping → XLSX → verify |
+| `lessid run [--site S] [--yes] [--parallel N] [--force]` | Full pipeline: CPT → mapping → verify |
 | `lessid verify [--site S]` | Re-run verification checks only |
-| `lessid spotcheck SITE` | Interactive REPL: look up mappings, sample pairs, check XLSX output |
+| `lessid spotcheck SITE` | Interactive REPL: look up mappings, sample pairs |
 | `lessid audit [SITE...] [-o FILE]` | List all ID columns that will be remapped; optionally export to CSV |
 
 The pipeline prints the resolved worker count and a summary table at each phase:
@@ -142,9 +138,7 @@ Surrogate ID format: `{PREFIX}_{SITECODE}_{8DIGITS}` — e.g. `PAT_C7LC_00000118
 lessid_drnoc/
 └── C7LC_compare_deq_q01/
     ├── 20240601_compare_deq_q01.cpt   ← de-identified CPT (SAS transport)
-    ├── 20240601_compare_deq_q01.xlsx  ← de-identified XLSX
-    ├── .cpt_completed                 ← marker: CPT phase done (persists after verify)
-    └── .xlsx_completed                ← marker: XLSX phase done (persists after verify)
+    └── .cpt_completed                 ← marker: CPT phase done (persists after verify)
 
 lessid_lookup/                         ← KEEP RESTRICTED (contains raw IDs)
 └── C7LC/
